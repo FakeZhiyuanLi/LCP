@@ -53,8 +53,8 @@ def test_catalog_can_explicitly_include_reserved_test_folder():
     ).list_classes()
 
     assert [(item.name, item.folder_id) for item in classes] == [
-        ("LIT 101", "lit-id"),
         ("LCP Test", "test-id"),
+        ("LIT 101", "lit-id"),
     ]
 
 
