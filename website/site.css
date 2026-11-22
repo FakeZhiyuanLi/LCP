@@ -320,3 +320,27 @@ footer { background: #081d1d; }
 .hero, .install {
   box-shadow: 0 0 0 100vmax var(--night);
 }
+
+/* Keep the dark study-room backgrounds full bleed without covering following sections. */
+.hero, .install {
+  position: relative;
+  isolation: isolate;
+  overflow: visible;
+  box-shadow: none;
+  background: transparent;
+}
+.hero::after, .install::after {
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  z-index: 0;
+  width: 100vw;
+  pointer-events: none;
+  content: "";
+  background: var(--night);
+  transform: translateX(-50%);
+}
+.hero > *, .install > * {
+  position: relative;
+  z-index: 1;
+}
