@@ -606,6 +606,58 @@ final class WorkspaceModel: ObservableObject {
             presentedContextExportClassID = classID
         }
     }
+
+    func openPlanner(for classID: UUID? = nil) {
+        let target = classID ?? selectedClassID
+        guard let target, state.classes.contains(where: { $0.id == target }) else { return }
+        inWorkspace("Open Class Planner") { [self] in
+            selection = .classDetail(target)
+            // The class page owns the planner tab, so selecting it remains a
+            // normal workspace navigation action and does not create a second
+            // window or an unscoped context request.
+            plannerClassID = target
+        }
+    }
+
+    @Published var plannerClassID: UUID?
+
+    func saveAgentPlan(classID: UUID, objective: String, plan: String, profile: AgentProviderProfile,
+                       context: ClassPlannerContext) {
+        guard context.classIDs == [classID], state.classes.contains(where: { $0.id == classID }) else {
+            errorMessage = "Save this plan from the same class whose context was reviewed."
+            return
+        }
+        let trimmedPlan = plan.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPlan.isEmpty, trimmedPlan.utf8.count <= 262_144 else {
+            errorMessage = "The generated plan is empty or exceeds the class-history size limit."
+            return
+        }
+        let request = objective.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !request.isEmpty, request.utf8.count <= 4_096,
+              request.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil else {
+            errorMessage = "The planning request is empty or invalid."
+            return
+        }
+        let historyBody = "Request\n\(request)\n\nGenerated plan\n\(trimmedPlan)"
+        guard historyBody.utf8.count <= 262_144 else {
+            errorMessage = "The planning request and generated plan exceed the class-history size limit."
+            return
+        }
+        let classLabel = state.classes.first(where: { $0.id == classID })?.shortLabel ?? "Class"
+        let title = "Agent plan · \(classLabel) · \(Date.now.formatted(date: .abbreviated, time: .shortened))"
+        let citations = Array(context.sourceCitations.prefix(128))
+        let revisionBeforeSave = state.revision
+        mutate { state in
+            state.activities.append(ActivityEntry(classID: classID, kind: "agent_plan", title: title,
+                                                  body: historyBody, citations: citations,
+                                                  agentIdentity: profile.name,
+                                                  inputContextManifest: citations))
+        }
+        if state.revision != revisionBeforeSave {
+            notice = "Saved the reviewed plan to \(classLabel)'s history."
+            plannerClassID = nil
+        }
+    }
     @discardableResult
     func exportSelectedContext(classID: UUID, materialIDs: [UUID]?, eventFrom: Date?, eventUntil: Date?) -> Bool {
         // The scope review already owns the presenter. Its save panel is a

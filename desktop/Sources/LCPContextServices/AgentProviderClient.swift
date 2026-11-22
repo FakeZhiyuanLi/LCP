@@ -81,9 +81,20 @@ public struct AgentProviderCheckResult: Equatable, Sendable {
     }
 }
 
+public struct AgentProviderGenerationResult: Equatable, Sendable {
+    public let text: String
+    public let requestID: String?
+
+    public init(text: String, requestID: String? = nil) {
+        self.text = text
+        self.requestID = requestID
+    }
+}
+
 public enum AgentProviderError: LocalizedError, Equatable, Sendable {
     case invalidConfiguration
     case invalidCredential
+    case inputTooLarge
     case unsupportedProvider
     case invalidResponse
     case requestFailed
@@ -95,6 +106,8 @@ public enum AgentProviderError: LocalizedError, Equatable, Sendable {
             return "Enter an HTTPS provider URL, a name, and a model."
         case .invalidCredential:
             return "Enter an API key without spaces or line breaks."
+        case .inputTooLarge:
+            return "The selected class context is too large for this provider request. Narrow the class context and try again."
         case .unsupportedProvider:
             return "This provider connection is not supported yet. Choose OpenAI-compatible Responses API."
         case .invalidResponse:
@@ -155,6 +168,39 @@ public struct OpenAICompatibleAgentClient: Sendable {
         }
     }
 
+    /// Generate a bounded answer from an explicit, user-visible class context.
+    /// The context is sent as quoted study data so source text cannot alter the
+    /// provider request's permissions or LCP records.
+    public func generate(prompt: String, maxOutputTokens: Int = 1_200) async throws -> AgentProviderGenerationResult {
+        guard profile.providerKind == "openai-compatible" else { throw AgentProviderError.unsupportedProvider }
+        guard (1...4_096).contains(maxOutputTokens), prompt.utf8.count <= 3_000_000 else {
+            throw AgentProviderError.inputTooLarge
+        }
+        let base = try AgentProviderProfile.validateBaseURL(profile.baseURL)
+        guard let host = base.host?.lowercased() else { throw AgentProviderError.invalidConfiguration }
+        let endpoint = base.appendingPathComponent("responses")
+        let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maxOutputTokens)
+        do {
+            let data = try await http.postJSON(endpoint, body: body, bearer: apiKey, host: host)
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let text = Self.responseText(from: object), !text.isEmpty else {
+                throw AgentProviderError.invalidResponse
+            }
+            return AgentProviderGenerationResult(text: text, requestID: object["id"] as? String)
+        } catch let error as AgentProviderError {
+            throw error
+        } catch let error as UniversityServiceError {
+            switch error {
+            case .http(let status): throw AgentProviderError.http(status)
+            case .message: throw AgentProviderError.requestFailed
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw AgentProviderError.requestFailed
+        }
+    }
+
     static func requestBody(model: String) throws -> Data {
         let payload: [String: Any] = [
             "model": model,
@@ -164,5 +210,34 @@ public struct OpenAICompatibleAgentClient: Sendable {
         ]
         guard JSONSerialization.isValidJSONObject(payload) else { throw AgentProviderError.invalidConfiguration }
         return try JSONSerialization.data(withJSONObject: payload, options: [])
+    }
+
+    static func generationBody(model: String, prompt: String, maxOutputTokens: Int) throws -> Data {
+        let payload: [String: Any] = [
+            "model": model,
+            "input": prompt,
+            "max_output_tokens": maxOutputTokens,
+            "store": false
+        ]
+        guard JSONSerialization.isValidJSONObject(payload) else { throw AgentProviderError.invalidConfiguration }
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [])
+        guard data.count <= 3_500_000 else { throw AgentProviderError.inputTooLarge }
+        return data
+    }
+
+    private static func responseText(from object: [String: Any]) -> String? {
+        if let direct = object["output_text"] as? String {
+            return direct.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let output = object["output"] as? [[String: Any]] else { return nil }
+        var fragments: [String] = []
+        for item in output {
+            guard let content = item["content"] as? [[String: Any]] else { continue }
+            for part in content where (part["type"] as? String) == "output_text" {
+                if let text = part["text"] as? String { fragments.append(text) }
+            }
+        }
+        let result = fragments.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.isEmpty ? nil : result
     }
 }

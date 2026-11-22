@@ -500,6 +500,9 @@ private struct ClassMenuItems: View {
             model.selection = .classDetail(enrollment.id)
             model.presentedEditor = .newActivity
         }
+        Button("Plan with Agent…", systemImage: "sparkles") {
+            model.openPlanner(for: enrollment.id)
+        }
         Button("Import Material…", systemImage: "square.and.arrow.down") { model.importMaterials(for: enrollment.id) }
         ClassDriveFolderActions(model: model, course: enrollment)
         Button("Export Class Context…", systemImage: "square.and.arrow.up") { model.exportContextBundle(for: enrollment.id) }
@@ -535,6 +538,8 @@ struct ClassContextView: View {
                 .padding(.horizontal, 20).padding(.bottom, 14)
             Group {
                 switch selectedTab {
+                case .planner:
+                    ClassPlannerView(model: model, classID: enrollment.id)
                 case .materials:
                     MaterialLibraryView(model: model, classID: enrollment.id, expandedMaterial: $expandedMaterial, filter: $materialFilter)
                 case .history:
@@ -553,6 +558,18 @@ struct ClassContextView: View {
             .padding(.horizontal, 20).padding(.bottom, 16)
         }
         .navigationTitle(enrollment.shortLabel)
+        .onAppear {
+            activatePlannerIfRequested()
+        }
+        .onChange(of: model.plannerClassID) { _, _ in
+            activatePlannerIfRequested()
+        }
+    }
+
+    private func activatePlannerIfRequested() {
+        guard model.plannerClassID == enrollment.id else { return }
+        selectedTab = .planner
+        model.plannerClassID = nil
     }
 
     private var courseCover: some View {

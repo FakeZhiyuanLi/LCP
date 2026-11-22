@@ -44,6 +44,8 @@ struct LCPDesktopApp: App {
                 Button("Import Material…") { workspace.importMaterials() }
                     .keyboardShortcut("i", modifiers: .command)
                     .disabled(workspace.selectedClassID == nil)
+                Button("Plan with Agent…", systemImage: "sparkles") { workspace.openPlanner() }
+                    .disabled(workspace.selectedClassID == nil)
                 Button("Open Capture") { workspace.openCapture() }
             }
             CommandGroup(after: .saveItem) {

@@ -39,6 +39,12 @@ entries, outside `ContextState`, portable backups, context snapshots, and MCP
 configuration exports. The OpenAI-compatible Responses check sends a bounded
 test prompt without class context. A future subscription transport can reuse the
 provider abstraction without moving personal keys into academic state.
+The class planner builds a fresh bounded snapshot through `RetrievalService`,
+quotes source text as untrusted study data, and sends it only after the student
+chooses an enabled provider and enters a planning request. A generated answer
+stays in the planner until review. Saving it creates an attributed `agent_plan`
+activity with source-level citations and an input-context manifest. The planner
+does not write university services or official class records.
 
 ## Capture
 

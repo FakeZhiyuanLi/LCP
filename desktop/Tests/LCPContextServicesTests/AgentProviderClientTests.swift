@@ -91,4 +91,25 @@ final class AgentProviderClientTests: XCTestCase {
             XCTAssertEqual(error.errorDescription, "The provider rejected the API key. Check the key and reconnect.")
         }
     }
+
+    func testGenerationSendsBoundedPromptAndReadsOutputText() async throws {
+        AgentProviderFixtureProtocol.response = ["id": "resp_plan", "output_text": "Plan ready"]
+        let result = try await client().generate(prompt: "quoted class context", maxOutputTokens: 64)
+
+        XCTAssertEqual(result.text, "Plan ready")
+        XCTAssertEqual(result.requestID, "resp_plan")
+        XCTAssertEqual(AgentProviderFixtureProtocol.requestBody["model"] as? String, "gpt-6.2-sol")
+        XCTAssertEqual(AgentProviderFixtureProtocol.requestBody["store"] as? Bool, false)
+        XCTAssertEqual(AgentProviderFixtureProtocol.requestBody["input"] as? String, "quoted class context")
+        XCTAssertEqual(AgentProviderFixtureProtocol.requestBody["max_output_tokens"] as? Int, 64)
+    }
+
+    func testGenerationRejectsOversizedPrompt() async throws {
+        do {
+            _ = try await client().generate(prompt: String(repeating: "x", count: 3_000_001))
+            XCTFail("Expected an input-size error")
+        } catch let error as AgentProviderError {
+            XCTAssertEqual(error, .inputTooLarge)
+        }
+    }
 }

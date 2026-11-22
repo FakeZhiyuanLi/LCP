@@ -113,6 +113,20 @@ MCP client should read selected classes or materials. The current provider
 surface is BYOK. A future LCP subscription can use the same provider abstraction
 without requiring a personal key.
 
+### Class planner
+
+Open a class and choose **Plan** or use **Class actions → Plan with Agent…**. Enter
+what you want to accomplish and choose an enabled provider. LCP builds a fresh,
+bounded snapshot from that class's current materials, reviewed coursework,
+class-history entries, and available accepted lecture transcripts. Raw audio,
+credentials, connection grants, and other classes are excluded. Source text is
+quoted as untrusted study data so it cannot change LCP permissions or records.
+
+The generated answer stays in the planner until you review it. **Save to Class
+History** creates an attributed, citation-backed `agent_plan` entry. Generating
+or saving a plan does not edit Canvas, Drive, Gmail, Gradescope, deadlines,
+grades, or recordings.
+
 - **UCI Canvas.** Open **Account → Settings → Approved Integrations** in
   UCI Canvas. If the university enables personal access tokens for your account,
   create one for your own LCP installation, then enter it under **Connections → UCI Canvas → Set Up**.
