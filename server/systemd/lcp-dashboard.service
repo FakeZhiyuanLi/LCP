@@ -1,0 +1,16 @@
+[Unit]
+Description=LCP read-only transcript dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/lcp/venv/bin/lcp-dashboard --root /data/lectures --host 127.0.0.1 --port 8186
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

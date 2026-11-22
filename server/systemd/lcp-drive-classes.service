@@ -1,0 +1,15 @@
+[Unit]
+Description=Publish the Google Drive class catalog for the LCP Mac client
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+Environment=LCP_RCLONE=rclone
+EnvironmentFile=%h/.config/lcp/drive.env
+ExecStart=%h/.local/share/lcp/venv/bin/lcp-drive-classes \
+  --output /data/lectures/classes/classes.json \
+  --remote gdrive \
+  --rclone ${LCP_RCLONE} \
+  --drive-root-folder-id ${LCP_DRIVE_ROOT_FOLDER_ID}

@@ -1,0 +1,138 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		100000000000000000000001 /* LCPContextCore in Frameworks */ = {isa = PBXBuildFile; productRef = 900000000000000000000001 /* LCPContextCore */; };
+		100000000000000000000002 /* LCPContextServices in Frameworks */ = {isa = PBXBuildFile; productRef = 900000000000000000000002 /* LCPContextServices */; };
+		100000000000000000000003 /* LCPClient in Frameworks */ = {isa = PBXBuildFile; productRef = 900000000000000000000003 /* LCPClient */; };
+		100000000000000000000004 /* ReleaseSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* ReleaseSmokeTests.swift */; };
+		100000000000000000000005 /* LCPContextCore in Frameworks */ = {isa = PBXBuildFile; productRef = 900000000000000000000004 /* LCPContextCore */; };
+		100000000000000000000006 /* LCP.icns in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* LCP.icns */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		200000000000000000000001 /* LCP Desktop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "LCP Desktop.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000002 /* LCPDesktopSmokeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LCPDesktopSmokeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000003 /* ReleaseSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LCPDesktop.xcodeproj/SmokeTests/ReleaseSmokeTests.swift; sourceTree = "<group>"; };
+		200000000000000000000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Resources/Info.plist; sourceTree = "<group>"; };
+		200000000000000000000005 /* LCP.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Resources/LCP.icns; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		300000000000000000000001 /* Desktop app sources */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Sources/LCPDesktop; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		400000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000001, 100000000000000000000002, 100000000000000000000003, ); runOnlyForDeploymentPostprocessing = 0; };
+		400000000000000000000002 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000005, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		500000000000000000000001 = {isa = PBXGroup; children = (300000000000000000000001, 200000000000000000000003, 200000000000000000000004, 200000000000000000000005, 500000000000000000000002, ); sourceTree = "<group>"; };
+		500000000000000000000002 /* Products */ = {isa = PBXGroup; children = (200000000000000000000001, 200000000000000000000002, ); name = Products; sourceTree = "<group>"; };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		600000000000000000000001 /* LCPDesktop */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 800000000000000000000002;
+			buildPhases = (400000000000000000000003, 400000000000000000000001, 400000000000000000000004, 400000000000000000000005, );
+			buildRules = ();
+			dependencies = ();
+			fileSystemSynchronizedGroups = (300000000000000000000001, );
+			name = LCPDesktop;
+			packageProductDependencies = (900000000000000000000001, 900000000000000000000002, 900000000000000000000003, );
+			productName = "LCP Desktop";
+			productReference = 200000000000000000000001;
+			productType = "com.apple.product-type.application";
+		};
+		600000000000000000000002 /* LCPDesktopSmokeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 800000000000000000000003;
+			buildPhases = (400000000000000000000006, 400000000000000000000002, );
+			buildRules = ();
+			dependencies = ();
+			name = LCPDesktopSmokeTests;
+			packageProductDependencies = (900000000000000000000004, );
+			productName = LCPDesktopSmokeTests;
+			productReference = 200000000000000000000002;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		700000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2700; LastUpgradeCheck = 2700; TargetAttributes = {600000000000000000000001 = {CreatedOnToolsVersion = 27.2; }; 600000000000000000000002 = {CreatedOnToolsVersion = 27.2; }; }; };
+			buildConfigurationList = 800000000000000000000001;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base, );
+			mainGroup = 500000000000000000000001;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (900000000000000000000005, 900000000000000000000006, );
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 500000000000000000000002;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (600000000000000000000001, 600000000000000000000002, );
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		400000000000000000000004 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000006 /* LCP.icns in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		400000000000000000000005 /* Embed local agent bridge */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ("$(SRCROOT)/Package.swift", );
+			name = "Embed local agent bridge";
+			outputPaths = ("$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/LCPAgentBridge", );
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\nexport PATH=/usr/bin:/bin:/usr/sbin:/sbin\nbridge_configuration=debug\nif [ \"$CONFIGURATION\" = Release ]; then bridge_configuration=release; fi\nbridge_scratch=\"$DERIVED_FILE_DIR/LCPAgentBridge\"\nxcrun swift build --package-path \"$SRCROOT\" --scratch-path \"$bridge_scratch\" --configuration \"$bridge_configuration\" --arch arm64 --jobs 2 --product LCPAgentBridge\nbridge_bin=$(xcrun swift build --package-path \"$SRCROOT\" --scratch-path \"$bridge_scratch\" --configuration \"$bridge_configuration\" --arch arm64 --show-bin-path)\nmkdir -p \"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers\"\n/usr/bin/ditto \"$bridge_bin/LCPAgentBridge\" \"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/LCPAgentBridge\"\n/usr/bin/codesign --force --sign - \"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/LCPAgentBridge\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		400000000000000000000003 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		400000000000000000000006 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000004, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A00000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; MACOSX_DEPLOYMENT_TARGET = 14.0; ONLY_ACTIVE_ARCH = YES; SDKROOT = macosx; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_VERSION = 5.0; }; name = Debug; };
+		A00000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_VERSION = 5.0; }; name = Release; };
+		A00000000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ARCHS = arm64; CODE_SIGN_IDENTITY = "-"; CODE_SIGN_STYLE = Manual; COMBINE_HIDPI_IMAGES = YES; CURRENT_PROJECT_VERSION = 26; ENABLE_APP_SANDBOX = NO; ENABLE_HARDENED_RUNTIME = NO; ENABLE_USER_SCRIPT_SANDBOXING = NO; EXECUTABLE_NAME = LCPDesktop; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Resources/Info.plist; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../Frameworks", ); MARKETING_VERSION = 0.4.10; PRODUCT_BUNDLE_IDENTIFIER = org.lcp.Desktop; PRODUCT_NAME = "LCP Desktop"; SWIFT_EMIT_LOC_STRINGS = YES; }; name = Debug; };
+		A00000000000000000000004 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ARCHS = arm64; CODE_SIGN_IDENTITY = "-"; CODE_SIGN_STYLE = Manual; COMBINE_HIDPI_IMAGES = YES; CURRENT_PROJECT_VERSION = 26; ENABLE_APP_SANDBOX = NO; ENABLE_HARDENED_RUNTIME = NO; ENABLE_USER_SCRIPT_SANDBOXING = NO; EXECUTABLE_NAME = LCPDesktop; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Resources/Info.plist; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../Frameworks", ); MARKETING_VERSION = 0.4.10; PRODUCT_BUNDLE_IDENTIFIER = org.lcp.Desktop; PRODUCT_NAME = "LCP Desktop"; SWIFT_EMIT_LOC_STRINGS = YES; }; name = Release; };
+		A00000000000000000000005 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ARCHS = arm64; CODE_SIGN_IDENTITY = "-"; CODE_SIGN_STYLE = Manual; CURRENT_PROJECT_VERSION = 26; GENERATE_INFOPLIST_FILE = YES; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@loader_path/../Frameworks", ); MARKETING_VERSION = 0.4.10; PRODUCT_BUNDLE_IDENTIFIER = org.lcp.Desktop.SmokeTests; PRODUCT_NAME = "$(TARGET_NAME)"; }; name = Debug; };
+		A00000000000000000000006 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ARCHS = arm64; CODE_SIGN_IDENTITY = "-"; CODE_SIGN_STYLE = Manual; CURRENT_PROJECT_VERSION = 26; GENERATE_INFOPLIST_FILE = YES; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@loader_path/../Frameworks", ); MARKETING_VERSION = 0.4.10; PRODUCT_BUNDLE_IDENTIFIER = org.lcp.Desktop.SmokeTests; PRODUCT_NAME = "$(TARGET_NAME)"; }; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		800000000000000000000001 = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000001, A00000000000000000000002, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		800000000000000000000002 = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000003, A00000000000000000000004, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		800000000000000000000003 = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000005, A00000000000000000000006, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		900000000000000000000005 /* XCLocalSwiftPackageReference "." */ = {isa = XCLocalSwiftPackageReference; relativePath = .; };
+		900000000000000000000006 /* XCLocalSwiftPackageReference "../client" */ = {isa = XCLocalSwiftPackageReference; relativePath = ../client; };
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		900000000000000000000001 /* LCPContextCore */ = {isa = XCSwiftPackageProductDependency; package = 900000000000000000000005; productName = LCPContextCore; };
+		900000000000000000000002 /* LCPContextServices */ = {isa = XCSwiftPackageProductDependency; package = 900000000000000000000005; productName = LCPContextServices; };
+		900000000000000000000003 /* LCPClient */ = {isa = XCSwiftPackageProductDependency; package = 900000000000000000000006; productName = LCPClient; };
+		900000000000000000000004 /* LCPContextCore */ = {isa = XCSwiftPackageProductDependency; package = 900000000000000000000005; productName = LCPContextCore; };
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 700000000000000000000001 /* Project object */;
+}

@@ -1,0 +1,24 @@
+[Unit]
+Description=LCP read-only desktop feed export (independent of worker)
+
+[Service]
+Type=oneshot
+# Mandatory boundary executes before Python. No unsandboxed fallback exists.
+ExecStart=%h/.local/share/lcp-desktop-exporter/current/lcp-export-sandbox %h/.local/share/lcp-desktop-exporter/current /data/lectures %h/.local/share/lcp-desktop-feed -- /usr/bin/python3 -I -S -B %h/.local/share/lcp-desktop-exporter/current/run_export.py --source-root /data/lectures --output-root %h/.local/share/lcp-desktop-feed --producer-id lcp-desktop-exporter --environment self-hosted
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/data/lectures
+InaccessiblePaths=/data/lectures/archive /data/lectures/work /data/lectures/vault /data/lectures/classes /data/lectures-test
+InaccessiblePaths=/data/lectures/state/provider-control.json /data/lectures/state/provider-repairs.json /data/lectures/state/stt-retry-limits.json /data/lectures/state/worker.lock
+ReadWritePaths=%h/.local/share/lcp-desktop-feed
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+MemoryMax=256M
+CPUQuota=20%
+Nice=10
+TimeoutStartSec=90
+StandardOutput=journal
+StandardError=journal

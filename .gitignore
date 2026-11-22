@@ -1,0 +1,38 @@
+# Local build products and tool state
+.build/
+.swiftpm/
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+*.egg-info/
+.venv/
+
+# Local credentials, databases and capture media
+.env
+.env.*
+!.env.example
+client_secret*.json
+rclone.conf
+*.keychain-db
+*.p12
+*.p8
+*.sqlite
+*.sqlite-*
+*.store
+*.store-*
+*.m4a
+*.wav
+*.ready.json
+
+# Private deployment history and manual test receipts
+/docs/*-20??-??-??.*
+/docs/validation-artifacts/
+/docs/grok-pipeline-review.md
+/docs/lcp-architecture.html
+/server/constraints-rack1-py314.txt

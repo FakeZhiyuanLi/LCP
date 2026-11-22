@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh the LCP Google Drive class catalog every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=lcp-drive-classes.service
+
+[Install]
+WantedBy=timers.target

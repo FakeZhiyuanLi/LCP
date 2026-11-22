@@ -1,105 +1,23 @@
-# AGENTS.md — LCP Context & Codex Instructions
+# Working on LCP
 
-This document defines the system boundaries, interfaces, coding standards, and operational assumptions for AI agents (Codex, Claude Code, Cursor) developing the LCP repository.
+LCP Desktop is a local-first class library for macOS 14 and later on Apple Silicon. Keep the native app, capture library, and optional self-hosted transcription service independently usable.
 
----
+## Components
 
-## 1. Project Overview & Scope
+- `desktop/` contains the SwiftUI workspace, SwiftData library, scoped local MCP helper, university integrations, Xcode project, and release scripts. Read the desktop-specific instructions and storage contracts when changing these components. [Desktop instructions](desktop/AGENTS.md) · [Storage and interface contracts](docs/desktop-contracts.md)
+- `client/` contains the capture facade and a standalone menu bar recorder. Capture uses AVFoundation and writes a finalized AAC audio file and a versioned ready marker with the filename, size, and SHA-256 digest. Keep network access and provider credentials outside the capture library.
+- `server/` contains the optional Linux worker, a separate desktop feed exporter, and example units. The worker verifies copied input against the ready marker, preserves synced inputs, and archives verified audio before scratch cleanup. Use synthetic input and a fresh worker root for development. [Server setup](server/README.md)
 
-LCP consists of two decoupled subsystems in this repository:
-1. **macOS Client (`/client`):** A lightweight SwiftUI menu bar app that records audio in class and writes to a staged directory.
-2. **Server Worker (`/server`):** A Python ingestion watcher that monitors incoming audio, transcribes it via `faster-whisper` on an Nvidia GTX 1070 Ti, outputs structured Markdown, and registers notes with Hermes Agent.
+## Data and integration contracts
 
----
+Every academic class can record locally. Recording to a synced inbox requires a fresh validated destination and an explicit class mapping. Preserve the shared capture lease until finalization and never replace an app during a recording.
 
-## 2. macOS Client Specifications (`/client`)
+Keep material and transcript revisions immutable and retain exact revisions used by citations. Validate a full backup or feed generation before replacing state. Backups and exports must exclude service credentials. Store desktop credentials in the Mac Keychain.
 
-### Tech Stack
-- Swift 5.9+, SwiftUI, `AVFoundation`.
-- macOS target: 14.0+ (Sonoma / Sequoia).
-- App model: Menu Bar Extra (`MenuBarExtra`), no Dock icon (`LSUIElement = true`).
+Agent access uses scoped local stdio grants. Verify authorization on every request, including citation resolution. Agent proposals require user review, version preconditions, and idempotent acceptance. Report Drive publication and confirmed consumption by a downstream agent as separate facts.
 
-### Audio Recording Configuration
-- **Container / Codec:** `.m4a` / MPEG-4 AAC (`kAudioFormatMPEG4AAC`).
-- **Sample Rate:** `16000.0` Hz.
-- **Channels:** `1` (Mono).
-- **Bitrate:** `32000` bps.
-- **Audio Quality:** `AVAudioQuality.medium`.
+Use a temporary library and fictional sources for tests. Never check in real coursework, lecture media, account settings, private reports, or deployment state. Keep example configuration usable with the reader’s own directories and service credentials. Changes to the checkout do not authorize modifying a running worker, installed app, or production data.
 
-### Path & Naming Convention
-- **Staging Directory:** `~/Lectures/Incoming/` (must be created automatically if missing).
-- **Naming Pattern:** `<COURSE>_<YYYY-MM-DD_HHmm>.m4a` (e.g., `CS182_2026-10-18_1430.m4a`).
+## Verification
 
-### Required Permissions & Entitlements
-- `Info.plist`: `Privacy - Microphone Usage Description` (`NSMicrophoneUsageDescription`).
-- App Sandbox: If enabled, require `com.apple.security.device.audio-input`. For development builds, disabling App Sandbox is preferred to allow direct file writes to `~/Lectures/Incoming`.
-
-### Critical Client Edge Cases
-- Clean termination: Ensure `AVAudioRecorder.stop()` is invoked if the app receives termination signals (`applicationWillTerminate`) so files are not corrupted.
-- Visual state: Toggle menu bar icon between `mic.fill` (idle) and `record.circle.fill` with live `MM:SS` duration counter (recording).
-
----
-
-## 3. Server Ingestion Specifications (`/server`)
-
-### Operational Environment
-- **OS:** Ubuntu Desktop 22.04 / 24.04 LTS.
-- **GPU:** Nvidia GeForce GTX 1070 Ti (8 GB VRAM, Pascal CC 6.1).
-- **Sync Transport:** Syncthing (Folder ID: `lecture-inbox`).
-
-### Directory Layout
-```text
-/data/lectures/
-├── inbox/           # Syncthing destination (Receive Only)
-├── archive/         # Processed raw audio files
-└── vault/           # Transcribed markdown notes (consumed by Hermes Agent)
-    └── <COURSE>/
-        └── <COURSE>_<TIMESTAMP>.md
-```
-
-### Transcription Engine
-- Package: `faster-whisper`.
-- Model: `medium.en` (or `large-v3`).
-- Compute Type: `int8_float16` (avoids FP16 performance degradation on Pascal GPUs).
-- VAD Filter: Enabled (`min_silence_duration_ms=500`) to strip dead lecture space.
-
-### Output Markdown Schema
-Every generated note must follow this structure:
-```markdown
-# Lecture Notes: <FILENAME_STEM>
-
-- **Course:** <COURSE>
-- **Duration:** <MINUTES> minutes
-
-## Transcript
-
-**[00:00]** First transcribed segment...
-
-**[00:15]** Second transcribed segment...
-```
-
----
-
-## 4. Hermes Agent Skill Definition
-
-Location on server: `~/.hermes/skills/lecture_vault/SKILL.md`
-
-```markdown
-# Lecture Vault Search Skill
-
-## Description
-Search, read, and synthesize lecture notes and transcripts from `/data/lectures/vault/`.
-
-## Capabilities
-- Search course subdirectories: `/data/lectures/vault/<COURSE>/`
-- Scan transcripts for concepts, formulas, and discussions.
-- Ground answers strictly in transcripts, citing exact lecture dates and timestamps `[MM:SS]`.
-```
-
----
-
-## 5. Development Rules for Agents
-
-1. **Keep Subsystems Decoupled:** Never add server networking, SSH, or transcription logic inside the macOS Swift client. The client's only output is writing `.m4a` files into `~/Lectures/Incoming/`.
-2. **Deterministic File Watcher:** The Python server watcher must trigger on `on_closed` / `IN_CLOSE_WRITE` to ensure Syncthing has fully synced the file before transcription starts.
-3. **No Uncompressed WAVs:** Always enforce 16 kHz Mono AAC (`.m4a`) or Opus to keep sync payload sizes under 35 MB per lecture.
+On Apple Silicon macOS, run `swift test --package-path client`, `swift test --package-path desktop`, and `desktop/scripts/build-app.sh` for native changes. For worker changes, run the synthetic suites in an isolated Linux directory. Preserve resource limits, pause state and retry accounting when maintaining an existing deployment.

@@ -1,0 +1,15 @@
+[Service]
+# Optional: copy this file to
+# ~/.config/systemd/user/lcp-test-worker.service.d/publication.conf and replace
+# the placeholder with the ID of School Lectures/LCP Test. Keep the production
+# School Lectures root ID out of this unit.
+ExecStart=
+ExecStart=%h/.local/share/lcp/venv/bin/lcp-worker watch \
+  --root /data/lectures-test \
+  --transcriber elevenlabs \
+  --elevenlabs-model scribe_v2 \
+  --elevenlabs-diarize \
+  --publish --remote gdrive \
+  --rclone rclone \
+  --drive-root-folder-id REPLACE_WITH_LCP_TEST_DRIVE_ROOT_FOLDER_ID \
+  --reconcile-seconds 10

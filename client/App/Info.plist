@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>dev.lcp.Recorder</string>
+	<key>CFBundleName</key>
+	<string>LCP Recorder</string>
+	<key>CFBundleDisplayName</key>
+	<string>LCP Recorder</string>
+	<key>CFBundleExecutable</key>
+	<string>LCPRecorder</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleVersion</key>
+	<string>3</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.2</string>
+	<key>LCPCaptureProtocolVersion</key>
+	<integer>1</integer>
+	<key>LCPCaptureLeaseIdentifier</key>
+	<string>org.lcp.capture.v1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>LCP Recorder needs microphone access to capture lecture audio.</string>
+</dict>
+</plist>

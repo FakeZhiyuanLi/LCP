@@ -1,0 +1,17 @@
+[Unit]
+Description=LCP finalized lecture transcription worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/lcp/venv/bin/lcp-worker watch --root /data/lectures --transcriber elevenlabs --elevenlabs-model scribe_v2 --elevenlabs-diarize --elevenlabs-local-fallback --automatic-repair --max-automatic-repairs 1
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+UMask=0077
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-%h/.config/lcp/runtime.env
+
+[Install]
+WantedBy=default.target

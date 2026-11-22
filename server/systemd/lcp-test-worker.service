@@ -1,0 +1,30 @@
+[Unit]
+Description=LCP isolated test transcription worker (does not publish by default)
+After=network-online.target
+Wants=network-online.target
+
+# This unit deliberately has its own root.  The worker lock, durable state,
+# processing scratch, archive, and vault all live below /data/lectures-test and
+# therefore cannot collide with lcp-worker.service's /data/lectures state.
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/lcp/venv/bin/lcp-worker watch \
+  --root /data/lectures-test \
+  --transcriber elevenlabs \
+  --elevenlabs-model scribe_v2 \
+  --elevenlabs-diarize \
+  --reconcile-seconds 10
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+Environment=PYTHONUNBUFFERED=1
+# Reuse the protected API key/library-path environment used by the production
+# worker.  A separate test-runtime.env may be supplied as a drop-in when test
+# credentials or runtime overrides should be kept independent.
+EnvironmentFile=-%h/.config/lcp/runtime.env
+EnvironmentFile=-%h/.config/lcp/test-runtime.env
+
+[Install]
+WantedBy=default.target

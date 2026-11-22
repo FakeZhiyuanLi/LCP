@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0b0e10">
+    <meta name="description" content="Read-only LCP transcript status and quality dashboard.">
+    <title>LCP / Transcript ledger</title>
+    <link rel="stylesheet" href="/assets/dashboard.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 16h4l2.25-7L15 24l3.25-16L22 20h2l1.5-4H28" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </span>
+          <span class="brand-copy">
+            <span class="eyebrow">LECTURE CAPTURE PIPELINE</span>
+            <strong>LCP</strong>
+          </span>
+        </a>
+        <div class="topbar-meta">
+          <span class="node-chip"><span class="status-dot"></span><span id="api-state">API LIVE</span></span>
+          <span class="provider-chip" id="provider" hidden></span>
+          <button class="icon-button" id="refresh-button" type="button" aria-label="Refresh transcript status" title="Refresh status">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-14.9-3.9L3 10m0 0V4m0 6h6M4 13a8.1 8.1 0 0 0 14.9 3.9L21 14m0 0v6m0-6h-6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <main>
+        <section class="hero" aria-labelledby="page-title">
+          <div class="hero-copy">
+            <p class="eyebrow accent-label">OPERATIONS / TRANSCRIPT FLOW</p>
+            <h1 id="page-title">Every lecture,<br><em>accounted for.</em></h1>
+            <p class="hero-description">A quiet ledger for the path from recorded audio to Drive and Grok. Review the exceptions first; let the healthy runs recede.</p>
+          </div>
+          <div class="hero-aside" aria-label="Pipeline state">
+            <div class="signal-lockup">
+              <div class="signal-orbit"><span></span><span></span><span></span></div>
+              <div>
+                <span class="eyebrow">WORKER STATUS</span>
+                <strong>Pipeline overview</strong>
+                <small id="last-sync">Waiting for first sync</small>
+              </div>
+            </div>
+            <div class="route-line" aria-hidden="true"><span>RECORD</span><i></i><span>TRANSCRIBE</span><i></i><span>DRIVE</span><i></i><span>GROK</span></div>
+          </div>
+        </section>
+
+        <section class="metric-grid" aria-label="Transcript totals">
+          <article class="metric metric-total">
+            <div class="metric-heading"><span class="eyebrow">TOTAL RECORDINGS</span><span class="metric-mark" aria-hidden="true">01</span></div>
+            <strong id="metric-total">—</strong>
+            <span class="metric-note">durable transcript jobs</span>
+          </article>
+          <article class="metric metric-published">
+            <div class="metric-heading"><span class="eyebrow">PUBLISHED</span><span class="metric-mark" aria-hidden="true">02</span></div>
+            <strong id="metric-published">—</strong>
+            <span class="metric-note">verified in Drive</span>
+          </article>
+          <article class="metric metric-review">
+            <div class="metric-heading"><span class="eyebrow">NEEDS REVIEW</span><span class="metric-mark" aria-hidden="true">03</span></div>
+            <strong id="metric-review">—</strong>
+            <span class="metric-note">quality or relevance signal</span>
+          </article>
+          <article class="metric metric-blocked">
+            <div class="metric-heading"><span class="eyebrow">BLOCKED</span><span class="metric-mark" aria-hidden="true">04</span></div>
+            <strong id="metric-blocked">—</strong>
+            <span class="metric-note">held from publication</span>
+          </article>
+        </section>
+
+        <section class="ledger-section" aria-labelledby="ledger-title">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow accent-label">DURABLE STATE</p>
+              <h2 id="ledger-title">Transcript ledger <span id="ledger-count">—</span></h2>
+            </div>
+            <p class="section-note">Select a row to inspect quality and delivery signals.</p>
+          </div>
+          <div class="toolbar">
+            <div class="filter-tabs" role="tablist" aria-label="Filter transcripts">
+              <button class="filter-tab active" type="button" role="tab" aria-selected="true" data-filter="all">All <span id="filter-all">—</span></button>
+              <button class="filter-tab" type="button" role="tab" aria-selected="false" data-filter="published">Published <span id="filter-published">—</span></button>
+              <button class="filter-tab" type="button" role="tab" aria-selected="false" data-filter="review">Review <span id="filter-review">—</span></button>
+              <button class="filter-tab" type="button" role="tab" aria-selected="false" data-filter="blocked">Blocked <span id="filter-blocked">—</span></button>
+            </div>
+            <label class="search-field">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m16 16 5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+              <span class="sr-only">Search transcripts</span>
+              <input id="search" type="search" placeholder="Search course or recording" autocomplete="off">
+            </label>
+          </div>
+
+          <div class="table-frame">
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Recording</th>
+                    <th scope="col">Captured</th>
+                    <th scope="col">Duration</th>
+                    <th scope="col">Quality</th>
+                    <th scope="col">Delivery</th>
+                    <th scope="col"><span class="sr-only">Open</span></th>
+                  </tr>
+                </thead>
+                <tbody id="transcript-rows"></tbody>
+              </table>
+            </div>
+            <div id="loading-state" class="table-state loading-state"><span class="loader"></span><span>Reading durable state…</span></div>
+            <div id="empty-state" class="table-state" hidden>
+              <span class="empty-glyph">∅</span>
+              <strong>No recordings match this view.</strong>
+              <span>Try another filter or clear the search.</span>
+            </div>
+            <div id="error-state" class="table-state error-state" hidden>
+              <span class="empty-glyph">!</span>
+              <strong>Dashboard data is unavailable.</strong>
+              <span id="error-message">Retry when the worker is reachable.</span>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer"><span>LCP / READ-ONLY OPERATIONS VIEW</span><span id="footer-updated">—</span></footer>
+    </div>
+
+    <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+    <aside class="detail-drawer" id="detail-drawer" aria-labelledby="detail-title" aria-hidden="true" tabindex="-1" hidden>
+      <div class="drawer-header">
+        <div><p class="eyebrow accent-label">TRANSCRIPT DETAIL</p><h2 id="detail-title">Select a recording</h2></div>
+        <button class="icon-button" id="close-drawer" type="button" aria-label="Close transcript detail">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div id="drawer-content" class="drawer-content"></div>
+    </aside>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/assets/dashboard.js" defer></script>
+  </body>
+</html>
