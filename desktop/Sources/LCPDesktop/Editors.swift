@@ -7,11 +7,12 @@ struct EditorFrame<Content: View>: View {
     let canSave: Bool
     let saveLabel: String
     let height: CGFloat
+    let width: CGFloat
     let save: () -> Void
     @ViewBuilder var content: Content
     @Environment(\.dismiss) private var dismiss
-    init(title: String, canSave: Bool = true, saveLabel: String = "Save", height: CGFloat = 580, save: @escaping () -> Void, @ViewBuilder content: () -> Content) {
-        self.title = title; self.canSave = canSave; self.saveLabel = saveLabel; self.height = height; self.save = save; self.content = content()
+    init(title: String, canSave: Bool = true, saveLabel: String = "Save", height: CGFloat = 580, width: CGFloat = 620, save: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.title = title; self.canSave = canSave; self.saveLabel = saveLabel; self.height = height; self.width = width; self.save = save; self.content = content()
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -20,7 +21,7 @@ struct EditorFrame<Content: View>: View {
             Divider()
             HStack { Spacer(); Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction); Button(saveLabel, action: save).keyboardShortcut(.defaultAction).disabled(!canSave) }.padding(20)
         }
-        .frame(width: 620, height: height)
+        .frame(width: width, height: height)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
         .accessibilityAddTraits(.isModal)
@@ -100,29 +101,91 @@ struct ClassEditor: View {
     }
 
     var body: some View {
-        EditorFrame(title: existing == nil ? "Add a Class" : "Edit Class", canSave: !name.isEmpty && validCredits, height: showsDetails ? 580 : 276, save: save) {
-            Form {
-                TextField("Class Name", text: $title, prompt: Text("e.g. Comlit 9"))
-                DisclosureGroup("Optional details", isExpanded: $showsDetails) {
-                    if !model.state.terms.isEmpty {
-                        Picker("Term", selection: $termID) {
-                            Text("No term").tag(nil as UUID?)
-                            ForEach(model.state.terms) { Text($0.name).tag(Optional($0.id)) }
+        EditorFrame(title: existing == nil ? "Add a Class" : "Edit Class", canSave: !name.isEmpty && validCredits, height: showsDetails ? 680 : 380, width: 720, save: save) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(existing == nil
+                         ? "Only the class name is required. You can add the rest whenever you are ready."
+                         : "Keep the class details that help you find recordings, readings, and notes later.")
+                        .font(.callout)
+                        .foregroundStyle(WorkspacePalette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    ClassEditorCard(title: "Class identity", subtitle: "This is the only required field.") {
+                        ClassEditorTextField("Class name", text: $title, prompt: "e.g. Comlit 9", isRequired: true)
+                    }
+
+                    ClassEditorCard(title: "Optional details", subtitle: "Add a term, course information, or meeting details to make this class easier to recognize.") {
+                        DisclosureGroup(isExpanded: $showsDetails) {
+                            VStack(alignment: .leading, spacing: 14) {
+                                if !model.state.terms.isEmpty {
+                                    ClassEditorField("Term") {
+                                        Picker("Term", selection: $termID) {
+                                            Text("No term").tag(nil as UUID?)
+                                            ForEach(model.state.terms) { Text($0.name).tag(Optional($0.id)) }
+                                        }
+                                        .labelsHidden()
+                                        .pickerStyle(.menu)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                }
+
+                                HStack(alignment: .top, spacing: 14) {
+                                    ClassEditorTextField("Course code", text: $code, prompt: "e.g. ICS 46")
+                                    ClassEditorTextField("Section", text: $section, prompt: "e.g. A")
+                                }
+
+                                ClassEditorTextField("Instructor / office hours", text: $instructor, prompt: "Optional")
+                                ClassEditorTextField("Meeting / session details", text: $sessionDetails, prompt: "e.g. Tue/Thu · 10:00 AM")
+                                ClassEditorTextField("Location / online meeting", text: $location, prompt: "Optional")
+
+                                ClassEditorTextField("Credits", text: $credits, prompt: "Optional")
+                                if !validCredits {
+                                    Label("Enter a nonnegative number or leave credits empty.", systemImage: "exclamationmark.triangle")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                            .padding(.top, 12)
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(showsDetails ? "Hide optional details" : "Show optional details")
+                                        .font(.headline)
+                                    Text(showsDetails ? "Collapse these fields when you are finished" : "Term, course code, meeting details, and more")
+                                        .font(.caption)
+                                        .foregroundStyle(WorkspacePalette.muted)
+                                }
+                                Spacer()
+                                if !showsDetails {
+                                    Text("Optional")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(WorkspacePalette.accent)
+                                        .padding(.horizontal, 9)
+                                        .padding(.vertical, 5)
+                                        .background(WorkspacePalette.tintSurface, in: Capsule())
+                                }
+                            }
+                        }
+                        .tint(WorkspacePalette.accent)
+                    }
+
+                    if showsDetails {
+                        ClassEditorCard(title: "Class status", subtitle: "Archived classes stay in your library and can be shown again from the sidebar.") {
+                            Toggle(isOn: $archived) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("Archived class").font(.headline)
+                                    Text("Hide this class from the active class list")
+                                        .font(.caption)
+                                        .foregroundStyle(WorkspacePalette.muted)
+                                }
+                            }
+                            .toggleStyle(.switch)
                         }
                     }
-                    TextField("Course Code", text: $code)
-                    TextField("Section", text: $section)
-                    TextField("Instructor / Office Hours", text: $instructor)
-                    TextField("Meeting / Session Details", text: $sessionDetails)
-                    TextField("Location / Online Meeting", text: $location)
-                    TextField("Credits", text: $credits)
-                    if !validCredits {
-                        Text("Enter a nonnegative number or leave credits empty.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Toggle("Archived Class", isOn: $archived)
                 }
-            }.formStyle(.grouped)
+                .padding(.vertical, 4)
+            }
         }.onAppear {
             if let existing {
                 code = existing.courseCode
@@ -171,6 +234,91 @@ struct ClassEditor: View {
                 model.selection = .classDetail(enrollment.id)
             }
             dismiss()
+        }
+    }
+}
+
+private struct ClassEditorCard<Content: View>: View {
+    let title: String
+    let subtitle: String
+    @ViewBuilder let content: () -> Content
+
+    init(title: String, subtitle: String, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.subtitle = subtitle
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(WorkspacePalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            content()
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(WorkspacePalette.line.opacity(0.72))
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+private struct ClassEditorField<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: () -> Content
+
+    init(_ title: String, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(WorkspacePalette.ink)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct ClassEditorTextField: View {
+    let title: String
+    @Binding var text: String
+    let prompt: String
+    let isRequired: Bool
+
+    init(_ title: String, text: Binding<String>, prompt: String, isRequired: Bool = false) {
+        self.title = title
+        self._text = text
+        self.prompt = prompt
+        self.isRequired = isRequired
+    }
+
+    var body: some View {
+        ClassEditorField(title) {
+            HStack(spacing: 6) {
+                TextField("", text: $text, prompt: Text(prompt))
+                    .textFieldStyle(.roundedBorder)
+                if isRequired {
+                    Text("Required")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(WorkspacePalette.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(WorkspacePalette.tintSurface, in: Capsule())
+                }
+            }
         }
     }
 }
