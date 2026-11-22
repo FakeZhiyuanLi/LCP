@@ -67,7 +67,8 @@ public struct CanvasCourseworkSyncService: Sendable {
         var unmatched: [String] = []
 
         for enrollment in classes where !enrollment.archived {
-            guard let linkedCourseID = enrollment.canvasCourseID else { continue }
+            guard enrollment.canvasAutoImportEnabled != false,
+                  let linkedCourseID = enrollment.canvasCourseID else { continue }
             let label = enrollment.displayLabel
             guard Int64(linkedCourseID).map({ $0 > 0 }) == true else {
                 unmatched.append("\(label) has an invalid Canvas course link")

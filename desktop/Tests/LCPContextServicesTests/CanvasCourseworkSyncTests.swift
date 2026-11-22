@@ -5,6 +5,7 @@ import LCPContextCore
 final class CanvasCourseworkSyncTests: XCTestCase {
     func testOnlyExplicitlyLinkedClassesAreMatched() {
         let saved = ClassEnrollment(canvasCourseID: "46", courseCode: "", title: "Saved class")
+        let paused = ClassEnrollment(canvasCourseID: "47", canvasAutoImportEnabled: false, courseCode: "ICS 46", title: "Paused class")
         let unlinkedByCode = ClassEnrollment(courseCode: "ICS 46", title: "Algorithms")
         let unlinkedByTitle = ClassEnrollment(courseCode: "", title: "Discrete Structures")
         let archived = ClassEnrollment(canvasCourseID: "49", courseCode: "PHIL 4", title: "Archived", archived: true)
@@ -15,7 +16,7 @@ final class CanvasCourseworkSyncTests: XCTestCase {
             UniversityItem(id: "49", title: "Archived", detail: "PHIL 4"),
         ]
 
-        let result = CanvasCourseworkSyncService.match(classes: [saved, unlinkedByCode, unlinkedByTitle, archived], courses: courses)
+        let result = CanvasCourseworkSyncService.match(classes: [saved, paused, unlinkedByCode, unlinkedByTitle, archived], courses: courses)
 
         XCTAssertEqual(result.matches.map(\.canvasCourseID), ["46"])
         XCTAssertEqual(result.matches.map(\.basis), ["saved Canvas course"])

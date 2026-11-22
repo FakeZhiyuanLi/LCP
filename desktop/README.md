@@ -111,8 +111,9 @@ new revision. Saved citations can still open the earlier copy offline.
 - **Automatic Canvas refresh.** Open **Settings → Canvas**, choose a refresh
   interval, and connect UCI Canvas. Then open each class's **Materials →
   University Services → UCI Canvas**, load your active courses, select the
-  matching Canvas course, and choose **Enable automatic Canvas sync for this
-  class**. LCP refreshes bounded snapshots of assignments, quizzes,
+  matching Canvas course. The **Automatically import new Canvas updates** switch
+  is on by default, and selecting a course with it on subscribes the class.
+  LCP refreshes bounded snapshots of assignments, quizzes,
   announcements, and course calendar events for explicitly subscribed classes
   only. Classes without a saved Canvas subscription are skipped, so a similar
   course code or title cannot attach coursework to the wrong class.

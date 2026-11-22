@@ -196,10 +196,30 @@ final class WorkspaceModel: ObservableObject {
                     throw DesktopUIError.message("This class is no longer in the library.")
                 }
                 state.classes[index].canvasCourseID = courseID
+                state.classes[index].canvasAutoImportEnabled = true
             }
             refresh()
             notice = "Canvas course linked. Automatic refresh is now enabled for this class."
             syncCanvasNow()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func setCanvasAutoImport(classID: UUID, enabled: Bool) {
+        guard let repository else { return }
+        var hasLinkedCourse = false
+        do {
+            try repository.update { state in
+                guard let index = state.classes.firstIndex(where: { $0.id == classID }) else {
+                    throw DesktopUIError.message("This class is no longer in the library.")
+                }
+                state.classes[index].canvasAutoImportEnabled = enabled
+                hasLinkedCourse = state.classes[index].canvasCourseID != nil
+            }
+            refresh()
+            notice = enabled
+                ? "Automatic Canvas import is enabled for this class."
+                : "Automatic Canvas import is paused for this class."
+            if enabled && hasLinkedCourse { syncCanvasNow() }
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -211,6 +231,7 @@ final class WorkspaceModel: ObservableObject {
                     throw DesktopUIError.message("This class is no longer in the library.")
                 }
                 state.classes[index].canvasCourseID = nil
+                state.classes[index].canvasAutoImportEnabled = nil
             }
             refresh()
             notice = "Automatic Canvas refresh is disabled for this class."
@@ -267,6 +288,12 @@ final class WorkspaceModel: ObservableObject {
             canvasSyncLastAttempt = Date.now
             return
         }
+        let importingClasses = linkedClasses.filter { $0.canvasAutoImportEnabled != false }
+        guard !importingClasses.isEmpty else {
+            canvasSyncStatus = "Automatic Canvas import is paused for every linked class."
+            canvasSyncLastAttempt = Date.now
+            return
+        }
         canvasSyncLastAttempt = Date.now
         canvasSyncInProgress = true
         canvasSyncStatus = "Refreshing Canvas coursework…"
@@ -280,7 +307,7 @@ final class WorkspaceModel: ObservableObject {
             do {
                 let courses = try await client.allCourses()
                 try Task.checkCancellation()
-                let matching = CanvasCourseworkSyncService.match(classes: linkedClasses, courses: courses)
+                let matching = CanvasCourseworkSyncService.match(classes: importingClasses, courses: courses)
                 let batch = try await CanvasCourseworkSyncService().fetch(client: client, matches: matching.matches)
                 try Task.checkCancellation()
                 guard !self.restorePending else {

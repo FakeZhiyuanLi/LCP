@@ -121,6 +121,9 @@ private struct UniversitySourceBrowser: View {
     private var linkedCanvasCourseID: String? {
         model.state.classes.first(where: { $0.id == classID })?.canvasCourseID
     }
+    private var canvasAutoImportEnabled: Bool {
+        model.state.classes.first(where: { $0.id == classID })?.canvasAutoImportEnabled != false
+    }
     private var selectedItem: UniversityItem? { items.first { $0.id == selectedID } }
     private var selectedAttachment: UniversityItem? {
         guard source == .gmail, selectedItem?.id == attachmentMessageID else { return nil }
@@ -250,6 +253,11 @@ private struct UniversitySourceBrowser: View {
                 attachmentMessageID = nil
             }
         }
+        .onChange(of: courseID) { _, newCourseID in
+            guard let newCourseID, canvasAutoImportEnabled,
+                  linkedCanvasCourseID != newCourseID else { return }
+            model.linkCanvasCourse(classID: classID, courseID: newCourseID)
+        }
     }
 
     @ViewBuilder private var canvasControls: some View {
@@ -257,9 +265,9 @@ private struct UniversitySourceBrowser: View {
             GroupBox {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: linkedCanvasCourseID == nil ? "link" : "checkmark.circle.fill")
-                            .foregroundStyle(linkedCanvasCourseID == nil ? WorkspacePalette.muted : .green)
-                        Text(linkedCanvasCourseID == nil ? "Automatic refresh is off" : "Automatic refresh enabled")
+                        Image(systemName: canvasAutoImportEnabled ? "checkmark.circle.fill" : "pause.circle")
+                            .foregroundStyle(canvasAutoImportEnabled ? .green : WorkspacePalette.muted)
+                        Text(canvasAutoImportEnabled ? "Automatic import is on" : "Automatic import is off")
                             .font(.callout.weight(.semibold))
                     }
                     if let linkedCanvasCourseID {
@@ -270,11 +278,23 @@ private struct UniversitySourceBrowser: View {
                             Text("The linked Canvas course is not in the loaded course list.")
                                 .foregroundStyle(.secondary)
                         }
-                        Button("Stop automatic refresh for this class", role: .destructive) {
+                    }
+                    Toggle("Automatically import new Canvas updates", isOn: Binding(
+                        get: { canvasAutoImportEnabled },
+                        set: { enabled in
+                            model.setCanvasAutoImport(classID: classID, enabled: enabled)
+                            if enabled, let courseID, linkedCanvasCourseID != courseID {
+                                model.linkCanvasCourse(classID: classID, courseID: courseID)
+                            }
+                        }
+                    ))
+                    .disabled(linkedCanvasCourseID == nil && courseID == nil)
+                    if linkedCanvasCourseID != nil {
+                        Button("Remove Canvas course link", role: .destructive) {
                             model.unlinkCanvasCourse(classID: classID)
                         }
                     } else {
-                        Text("Select one Canvas course below, then enable refresh for this class. Future assignments, quizzes, announcements, and calendar updates will be imported on the schedule in Settings → Canvas.")
+                        Text("Select one Canvas course below. With automatic import on, the selection is saved immediately and future assignments, quizzes, announcements, and calendar updates follow the schedule in Settings → Canvas.")
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -305,15 +325,19 @@ private struct UniversitySourceBrowser: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     if let courseID {
                         if linkedCanvasCourseID == nil {
-                            Button("Enable automatic Canvas sync for this class") {
-                                model.linkCanvasCourse(classID: classID, courseID: courseID)
-                            }
-                            .buttonStyle(.borderedProminent)
+                            Label(canvasAutoImportEnabled
+                                  ? "Selecting this course will subscribe this class"
+                                  : "Turn on automatic import to subscribe this class",
+                                  systemImage: canvasAutoImportEnabled ? "checkmark.circle" : "pause.circle")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
                         } else if linkedCanvasCourseID != courseID {
-                            Button("Switch automatic sync to this course") {
-                                model.linkCanvasCourse(classID: classID, courseID: courseID)
-                            }
-                            .buttonStyle(.bordered)
+                            Label(canvasAutoImportEnabled
+                                  ? "Selecting this course will switch the subscription"
+                                  : "Select this course, then turn on automatic import",
+                                  systemImage: canvasAutoImportEnabled ? "arrow.triangle.2.circlepath" : "pause.circle")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
                         } else {
                             Label("This class is subscribed to the selected course", systemImage: "checkmark")
                                 .font(.callout)
