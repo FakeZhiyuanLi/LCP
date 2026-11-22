@@ -198,8 +198,22 @@ final class WorkspaceModel: ObservableObject {
                 state.classes[index].canvasCourseID = courseID
             }
             refresh()
-            notice = "Canvas course linked. Automatic refresh will include its visible coursework and updates."
+            notice = "Canvas course linked. Automatic refresh is now enabled for this class."
             syncCanvasNow()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func unlinkCanvasCourse(classID: UUID) {
+        guard let repository else { return }
+        do {
+            try repository.update { state in
+                guard let index = state.classes.firstIndex(where: { $0.id == classID }) else {
+                    throw DesktopUIError.message("This class is no longer in the library.")
+                }
+                state.classes[index].canvasCourseID = nil
+            }
+            refresh()
+            notice = "Automatic Canvas refresh is disabled for this class."
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -241,9 +255,15 @@ final class WorkspaceModel: ObservableObject {
             canvasSyncLastAttempt = Date.now
             return
         }
-        let classes = state.classes.filter { !$0.archived }
-        guard !classes.isEmpty else {
-            canvasSyncStatus = "Add a class to match it with Canvas coursework."
+        let activeClasses = state.classes.filter { !$0.archived }
+        guard !activeClasses.isEmpty else {
+            canvasSyncStatus = "Add a class before enabling Canvas coursework refresh."
+            canvasSyncLastAttempt = Date.now
+            return
+        }
+        let linkedClasses = activeClasses.filter { $0.canvasCourseID != nil }
+        guard !linkedClasses.isEmpty else {
+            canvasSyncStatus = "Link a Canvas course to a class in University Services to enable automatic refresh."
             canvasSyncLastAttempt = Date.now
             return
         }
@@ -260,8 +280,7 @@ final class WorkspaceModel: ObservableObject {
             do {
                 let courses = try await client.allCourses()
                 try Task.checkCancellation()
-                let matching = CanvasCourseworkSyncService.match(classes: classes, courses: courses)
-                self.saveCanvasMatches(matching.matches)
+                let matching = CanvasCourseworkSyncService.match(classes: linkedClasses, courses: courses)
                 let batch = try await CanvasCourseworkSyncService().fetch(client: client, matches: matching.matches)
                 try Task.checkCancellation()
                 guard !self.restorePending else {
@@ -306,7 +325,7 @@ final class WorkspaceModel: ObservableObject {
                 let pending = self.canvasSyncPendingReviews.count
                 var message = "Canvas refreshed \(batch.sources.count) source(s). \(newMaterials) new, \(revisedMaterials) updated, \(unchangedMaterials) unchanged."
                 if pending > 0 { message += " \(pending) coursework item(s) await review." }
-                if !matching.unmatched.isEmpty { message += " \(matching.unmatched.count) class(es) need a Canvas course match." }
+                if !matching.unmatched.isEmpty { message += " \(matching.unmatched.count) linked class(es) need attention." }
                 if !failures.isEmpty { message += " \(failures.count) item(s) were skipped." }
                 self.canvasSyncStatus = message
             } catch is CancellationError {
@@ -317,22 +336,6 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
-    private func saveCanvasMatches(_ matches: [CanvasCourseMatch]) {
-        guard let repository else { return }
-        let changed = matches.filter { match in
-            state.classes.first(where: { $0.id == match.classID })?.canvasCourseID != match.canvasCourseID
-        }
-        guard !changed.isEmpty else { return }
-        do {
-            try repository.update { state in
-                for match in changed {
-                    guard let index = state.classes.firstIndex(where: { $0.id == match.classID }) else { continue }
-                    state.classes[index].canvasCourseID = match.canvasCourseID
-                }
-            }
-            refresh()
-        } catch { canvasSyncStatus = "Canvas course matching failed. \(error.localizedDescription)" }
-    }
     /// Global commands share the workspace's presenter. Reserve the next turn
     /// and recheck after bringing it forward; AppKit panels run nested event loops.
     func inWorkspace(_ actionName: String, _ action: @escaping @MainActor @Sendable () -> Void) {

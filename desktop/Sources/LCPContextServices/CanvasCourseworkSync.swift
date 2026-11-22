@@ -53,8 +53,8 @@ public struct CanvasCourseworkSyncBatch: Sendable {
     }
 }
 
-/// Matches local classes to active Canvas courses and fetches bounded, visible
-/// course context for automatic refresh. It never writes to Canvas.
+/// Fetches bounded, visible course context for classes that the student has
+/// explicitly linked to Canvas. It never writes to Canvas.
 public struct CanvasCourseworkSyncService: Sendable {
     public static let automaticKinds: [CanvasItemKind] = [.assignments, .quizzes, .announcements, .calendarEvents]
 
@@ -67,46 +67,23 @@ public struct CanvasCourseworkSyncService: Sendable {
         var unmatched: [String] = []
 
         for enrollment in classes where !enrollment.archived {
+            guard let linkedCourseID = enrollment.canvasCourseID else { continue }
             let label = enrollment.displayLabel
-            let explicit = enrollment.canvasCourseID.flatMap { id in usableCourses.first { $0.id == id } }
-            if enrollment.canvasCourseID != nil {
-                guard let course = explicit else {
-                    unmatched.append("\(label) is linked to a Canvas course that is no longer active")
-                    continue
-                }
-                if claimedCourseIDs.insert(course.id).inserted {
-                    matches.append(CanvasCourseMatch(classID: enrollment.id, canvasCourseID: course.id,
-                                                     title: course.title, courseCode: course.detail,
-                                                     basis: "saved Canvas course"))
-                } else {
-                    unmatched.append("\(label) has a Canvas course already linked to another class")
-                }
+            guard Int64(linkedCourseID).map({ $0 > 0 }) == true else {
+                unmatched.append("\(label) has an invalid Canvas course link")
                 continue
             }
-
-            let code = normalizedCourseCode(enrollment.courseCode)
-            let codeMatches = code.isEmpty ? [] : usableCourses.filter { normalizedCourseCode($0.detail) == code }
-            let title = normalized(enrollment.title)
-            let titleMatches = title.isEmpty ? [] : usableCourses.filter { normalized($0.title) == title }
-            let candidates: ([UniversityItem], String)
-            if codeMatches.count == 1 {
-                candidates = (codeMatches, "course code")
-            } else if codeMatches.count > 1 {
-                candidates = (codeMatches, "course code")
-            } else if titleMatches.count == 1 {
-                candidates = (titleMatches, "class name")
-            } else {
-                candidates = (titleMatches, "class name")
+            guard let course = usableCourses.first(where: { $0.id == linkedCourseID }) else {
+                unmatched.append("\(label) is linked to a Canvas course that is no longer active")
+                continue
             }
-
-            guard candidates.0.count == 1, let course = candidates.0.first,
-                  claimedCourseIDs.insert(course.id).inserted else {
-                unmatched.append("\(label) has no unique Canvas course match")
+            guard claimedCourseIDs.insert(course.id).inserted else {
+                unmatched.append("\(label) has a Canvas course already linked to another class")
                 continue
             }
             matches.append(CanvasCourseMatch(classID: enrollment.id, canvasCourseID: course.id,
                                              title: course.title, courseCode: course.detail,
-                                             basis: candidates.1))
+                                             basis: "saved Canvas course"))
         }
         return CanvasCourseMatchingResult(matches: matches, unmatched: unmatched)
     }
@@ -145,17 +122,4 @@ public struct CanvasCourseworkSyncService: Sendable {
         return [401, 403, 429].contains(status)
     }
 
-    private static func normalized(_ raw: String) -> String {
-        let folded = raw.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-        return folded.unicodeScalars.filter(CharacterSet.alphanumerics.contains).map(String.init).joined()
-    }
-
-    /// UCI commonly exposes Information & Computer Science as `I&C SCI` in
-    /// Canvas while the local class catalog uses `ICS`. Treat that registrar
-    /// spelling as the same exact course-code identity after normalization.
-    private static func normalizedCourseCode(_ raw: String) -> String {
-        let value = normalized(raw)
-        if value.hasPrefix("icsci") { return "ics" + String(value.dropFirst(5)) }
-        return value
-    }
 }

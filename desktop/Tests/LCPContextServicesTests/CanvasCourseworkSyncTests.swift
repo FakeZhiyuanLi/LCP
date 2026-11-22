@@ -3,11 +3,11 @@ import LCPContextCore
 @testable import LCPContextServices
 
 final class CanvasCourseworkSyncTests: XCTestCase {
-    func testMatchesSavedIDsThenExactUciCodesAndTitles() {
+    func testOnlyExplicitlyLinkedClassesAreMatched() {
         let saved = ClassEnrollment(canvasCourseID: "46", courseCode: "", title: "Saved class")
-        let code = ClassEnrollment(courseCode: "ICS 46", title: "Algorithms")
-        let title = ClassEnrollment(courseCode: "", title: "Discrete Structures")
-        let archived = ClassEnrollment(courseCode: "PHIL 4", title: "Archived", archived: true)
+        let unlinkedByCode = ClassEnrollment(courseCode: "ICS 46", title: "Algorithms")
+        let unlinkedByTitle = ClassEnrollment(courseCode: "", title: "Discrete Structures")
+        let archived = ClassEnrollment(canvasCourseID: "49", courseCode: "PHIL 4", title: "Archived", archived: true)
         let courses = [
             UniversityItem(id: "46", title: "Data Structures", detail: "SAVED 46"),
             UniversityItem(id: "47", title: "Algorithms", detail: "I&C SCI 46"),
@@ -15,30 +15,26 @@ final class CanvasCourseworkSyncTests: XCTestCase {
             UniversityItem(id: "49", title: "Archived", detail: "PHIL 4"),
         ]
 
-        let codeOnly = CanvasCourseworkSyncService.match(classes: [code], courses: [courses[1]])
-        XCTAssertEqual(codeOnly.matches.first?.basis, "course code")
+        let result = CanvasCourseworkSyncService.match(classes: [saved, unlinkedByCode, unlinkedByTitle, archived], courses: courses)
 
-        let result = CanvasCourseworkSyncService.match(classes: [saved, code, title, archived], courses: courses)
-
-        XCTAssertEqual(result.matches.map(\.canvasCourseID), ["46", "47", "48"])
-        XCTAssertEqual(result.matches.map(\.basis), ["saved Canvas course", "course code", "class name"])
+        XCTAssertEqual(result.matches.map(\.canvasCourseID), ["46"])
+        XCTAssertEqual(result.matches.map(\.basis), ["saved Canvas course"])
         XCTAssertTrue(result.unmatched.isEmpty)
     }
 
-    func testRejectsAmbiguousAndDuplicateMatchesAndIgnoresInvalidIDs() {
-        let duplicateCode = ClassEnrollment(courseCode: "TEST 46", title: "One")
-        let sameCode = ClassEnrollment(courseCode: "TEST 46", title: "Two")
+    func testReportsInvalidAndDuplicateExplicitLinks() {
+        let first = ClassEnrollment(canvasCourseID: "50", title: "One")
+        let duplicate = ClassEnrollment(canvasCourseID: "50", title: "Two")
         let invalidSaved = ClassEnrollment(canvasCourseID: "0", courseCode: "OTHER", title: "Invalid link")
         let courses = [
-            UniversityItem(id: "50", title: "One", detail: "TEST 46"),
-            UniversityItem(id: "51", title: "Two", detail: "TEST 46"),
-            UniversityItem(id: "not-a-number", title: "Invalid", detail: "OTHER"),
+            UniversityItem(id: "50", title: "Canvas course", detail: "TEST 46"),
         ]
 
-        let result = CanvasCourseworkSyncService.match(classes: [duplicateCode, sameCode, invalidSaved], courses: courses)
+        let result = CanvasCourseworkSyncService.match(classes: [first, duplicate, invalidSaved], courses: courses)
 
-        XCTAssertTrue(result.matches.isEmpty)
-        XCTAssertEqual(result.unmatched.count, 3)
-        XCTAssertTrue(result.unmatched.allSatisfy { $0.contains("no unique Canvas course match") || $0.contains("no longer active") })
+        XCTAssertEqual(result.matches.map(\.canvasCourseID), ["50"])
+        XCTAssertEqual(result.unmatched.count, 2)
+        XCTAssertTrue(result.unmatched.contains { $0.contains("already linked to another class") })
+        XCTAssertTrue(result.unmatched.contains { $0.contains("invalid Canvas course link") })
     }
 }

@@ -64,9 +64,9 @@ struct DesktopSettingsView: View {
                     }
                 }
                 Section("How automatic refresh works") {
-                    Text("LCP matches each active class to a saved Canvas course, an exact course code, or an exact class title. It imports read-only snapshots of assignments, quizzes, announcements, and course calendar events into the class library.")
+                    Text("Each class subscribes to one Canvas course that you select in that class's University Services view. LCP imports read-only snapshots of assignments, quizzes, announcements, and course calendar events for subscribed classes only.")
                     Text("New or changed official deadlines are placed in the review queue. They never overwrite your progress, submission links, citations, or reviewed Coursework until you approve the saved Canvas source.")
-                    Text("Connect UCI Canvas in Connections, then use University Services inside a class to review or correct a course match. Archived classes are skipped.")
+                    Text("Connect UCI Canvas in Connections, open a class, choose University Services → UCI Canvas, load your courses, and enable automatic sync for the selected course. Classes without an explicit subscription are skipped. Archived classes are skipped.")
                 }
             }.formStyle(.grouped).tabItem { Label("Canvas", systemImage: "arrow.triangle.2.circlepath") }.tag("canvas")
             Form {

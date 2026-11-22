@@ -253,55 +253,86 @@ private struct UniversitySourceBrowser: View {
     }
 
     @ViewBuilder private var canvasControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: linkedCanvasCourseID == nil ? "link" : "checkmark.circle.fill")
-                    .foregroundStyle(linkedCanvasCourseID == nil ? WorkspacePalette.muted : .green)
-                if let linkedCanvasCourseID {
-                    Text("Linked for automatic refresh")
-                    if let linked = courses.first(where: { $0.id == linkedCanvasCourseID }) {
-                        Text(linked.detail.isEmpty ? linked.title : "· \(linked.detail)")
-                            .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: linkedCanvasCourseID == nil ? "link" : "checkmark.circle.fill")
+                            .foregroundStyle(linkedCanvasCourseID == nil ? WorkspacePalette.muted : .green)
+                        Text(linkedCanvasCourseID == nil ? "Automatic refresh is off" : "Automatic refresh enabled")
+                            .font(.callout.weight(.semibold))
                     }
+                    if let linkedCanvasCourseID {
+                        if let linked = courses.first(where: { $0.id == linkedCanvasCourseID }) {
+                            Text(linked.detail.isEmpty ? linked.title : "\(linked.title) · \(linked.detail)")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("The linked Canvas course is not in the loaded course list.")
+                                .foregroundStyle(.secondary)
+                        }
+                        Button("Stop automatic refresh for this class", role: .destructive) {
+                            model.unlinkCanvasCourse(classID: classID)
+                        }
+                    } else {
+                        Text("Select one Canvas course below, then enable refresh for this class. Future assignments, quizzes, announcements, and calendar updates will be imported on the schedule in Settings → Canvas.")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } label: {
+                Text("Canvas subscription")
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Course to sync").font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Button(loadedCourses ? "Refresh list" : "Load my courses") { loadCourses() }
+                        .disabled(isBusy)
+                }
+                if !courses.isEmpty {
+                    Picker("Canvas course to sync", selection: Binding(get: { courseID }, set: { value in
+                        resetItems()
+                        selectedModule = nil
+                        courseID = value
+                    })) {
+                        Text("Choose a course").tag(nil as String?)
+                        ForEach(courses, id: \.id) { course in
+                            Text(course.detail.isEmpty ? course.title : "\(course.title) · \(course.detail)").tag(Optional(course.id))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if let courseID {
+                        if linkedCanvasCourseID == nil {
+                            Button("Enable automatic Canvas sync for this class") {
+                                model.linkCanvasCourse(classID: classID, courseID: courseID)
+                            }
+                            .buttonStyle(.borderedProminent)
+                        } else if linkedCanvasCourseID != courseID {
+                            Button("Switch automatic sync to this course") {
+                                model.linkCanvasCourse(classID: classID, courseID: courseID)
+                            }
+                            .buttonStyle(.bordered)
+                        } else {
+                            Label("This class is subscribed to the selected course", systemImage: "checkmark")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else if loadedCourses {
+                    Text("No active Canvas courses were returned.").foregroundStyle(.secondary)
                 } else {
-                    Text("Choose the matching Canvas course to enable automatic refresh.")
+                    Text("Load your active Canvas courses to choose one for this class.")
                         .foregroundStyle(.secondary)
                 }
-            }
-            .font(.callout)
-            if linkedCanvasCourseID == nil, let courseID {
-                Button("Link Selected Course for Automatic Refresh") {
-                    model.linkCanvasCourse(classID: classID, courseID: courseID)
-                }
-            } else if let linkedCanvasCourseID, let courseID, linkedCanvasCourseID != courseID {
-                Button("Use Selected Course for Automatic Refresh") {
-                    model.linkCanvasCourse(classID: classID, courseID: courseID)
+                if let cursor = courseCursor {
+                    Button("More courses") { loadCourses(cursor: cursor) }.disabled(isBusy)
                 }
             }
-        }
-        Button(loadedCourses ? "Refresh Courses" : "Load My Courses") { loadCourses() }
-            .disabled(isBusy)
-        if !courses.isEmpty {
-            HStack {
-                Picker("Canvas course", selection: Binding(get: { courseID }, set: { value in
-                    resetItems()
-                    selectedModule = nil
-                    courseID = value
-                })) {
-                    Text("Choose a course").tag(nil as String?)
-                    ForEach(courses, id: \.id) { course in
-                        Text(course.detail.isEmpty ? course.title : "\(course.title) · \(course.detail)").tag(Optional(course.id))
-                    }
-                }
-            }
-        } else if loadedCourses {
-            Text("No active courses on this page.").foregroundStyle(.secondary)
-        }
-        if let cursor = courseCursor {
-            Button("More Courses") { loadCourses(cursor: cursor) }.disabled(isBusy)
-        }
-        if courseID != nil {
-            HStack {
+            .padding(.horizontal, 4)
+            if courseID != nil {
+                VStack(alignment: .leading, spacing: 8) {
                 Picker("Course materials", selection: Binding(get: { kind }, set: { value in
                     resetItems()
                     selectedModule = nil
@@ -310,11 +341,12 @@ private struct UniversitySourceBrowser: View {
                     ForEach(CanvasItemKind.allCases, id: \.self) { Text($0.displayName).tag($0) }
                 }
                 Button("Browse") { loadItems() }.disabled(isBusy)
-            }
-            if let selectedModule {
-                HStack {
-                    Button("All Modules") { self.selectedModule = nil; loadItems() }
-                    Text(selectedModule.title).font(.headline)
+                }
+                if let selectedModule {
+                    HStack {
+                        Button("All Modules") { self.selectedModule = nil; loadItems() }
+                        Text(selectedModule.title).font(.headline)
+                    }
                 }
             }
         }
