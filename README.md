@@ -14,6 +14,7 @@ In **Class Library**, choose **New Class…** and enter a name. Open the class a
 - **Google Drive, Gmail, and Calendar** use Google OAuth credentials you configure in **Connections**. Drive can link a new class to a matching folder under **School Lectures**, or create one when you grant folder creation. Choose individual files, messages, or events to import.
 - **Gradescope, Piazza, Zoom, and the UCI Registrar** support saved links, downloaded Gradescope PDFs, or public course schedules, depending on the service.
 - **Agents** can read selected classes or materials through the bundled local MCP helper. The Codex CLI connection has been tested with fictional sources. For a chat client that accepts files, export the class context and attach the reviewed Markdown. [Connection and agent setup](desktop/README.md)
+- **BYOK providers** can be added from Agent Connections for an OpenAI-compatible Responses API. Keys stay in the Mac Keychain and the provider test sends no class context. A future subscription transport can reuse this provider surface.
 
 ## Build from source
 

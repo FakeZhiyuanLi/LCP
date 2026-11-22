@@ -5,12 +5,36 @@ import LCPContextServices
 
 struct AgentConnectionsView: View {
     @ObservedObject var model: WorkspaceModel
+    @State private var providerProfiles: [AgentProviderProfile] = []
+    @State private var providerError: String?
+
+    private var providerCredentials: AgentProviderCredentials {
+        AgentProviderCredentials.forLibrary(model.rootURL)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 Text("Choose what your agents can see.").font(.largeTitle.bold())
                 Text("LCP keeps the source context. Each local agent connection receives an explicit class scope. A snapshot export is a separate, deliberate sharing route.").font(.title3).foregroundStyle(.secondary)
-                HStack { Button("New Local Agent Grant…", systemImage: "plus") { model.presentedEditor = .newAgentGrant }.buttonStyle(.borderedProminent); Spacer() }
+                HStack(spacing: 10) {
+                    Button("New Local Agent Grant…", systemImage: "plus") { model.presentedEditor = .newAgentGrant }
+                        .buttonStyle(.borderedProminent)
+                    Button("Add BYOK Provider…", systemImage: "key") { model.presentedEditor = .newBYOKProvider }
+                        .buttonStyle(.bordered)
+                    Spacer()
+                }
+                if !providerProfiles.isEmpty {
+                    GroupBox("Bring your own provider") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Provider keys stay in the Mac Keychain. LCP sends only the small connection check until you explicitly use a provider with class context.")
+                                .font(.callout).foregroundStyle(.secondary)
+                            ForEach(providerProfiles) { profile in
+                                BYOKProviderCard(profile: profile, credentials: providerCredentials, onChanged: refreshProviderProfiles)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                    }
+                }
                 if model.state.connections.isEmpty {
                     ContentUnavailableView("No Agent Connections", systemImage: "point.3.connected.trianglepath.dotted", description: Text("Create a scoped local MCP grant for a compatible client, or export a selected class's context from its toolbar. No subscription is required to maintain your library."))
                 }
@@ -40,6 +64,171 @@ struct AgentConnectionsView: View {
                 Text("Revocation prevents future local tool requests. It cannot recall context already sent to an external agent. Connection secrets are not included in exports; the local stdio bridge does not require provider credentials.").font(.caption).foregroundStyle(.secondary)
             }.padding(28).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
         }.navigationTitle("Agent Connections")
+            .onAppear(perform: refreshProviderProfiles)
+            .onChange(of: model.rootURL) { _, _ in refreshProviderProfiles() }
+            .alert("Provider Connections Unavailable", isPresented: Binding(get: { providerError != nil }, set: { if !$0 { providerError = nil } })) {
+                Button("OK") { providerError = nil }
+            } message: { Text(providerError ?? "") }
+    }
+
+    private func refreshProviderProfiles() {
+        do { providerProfiles = try providerCredentials.profilesList() }
+        catch { providerError = error.localizedDescription }
+    }
+}
+
+private struct BYOKProviderCard: View {
+    let profile: AgentProviderProfile
+    let credentials: AgentProviderCredentials
+    let onChanged: () -> Void
+    @State private var testing = false
+    @State private var status: String?
+    @State private var confirmRemove = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Label(profile.name, systemImage: "key.fill").font(.headline)
+                Spacer()
+                Text(profile.enabled ? "Enabled" : "Paused")
+                    .font(.caption).foregroundStyle(profile.enabled ? .green : .secondary)
+            }
+            Text("OpenAI-compatible · \(profile.model)").font(.callout)
+            Text(redactedURL).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            HStack(spacing: 10) {
+                Button(testing ? "Testing…" : "Test Connection") { test() }
+                    .disabled(testing || !profile.enabled)
+                Button("Remove…", role: .destructive) { confirmRemove = true }
+                    .disabled(testing)
+                if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .confirmationDialog("Remove \(profile.name)?", isPresented: $confirmRemove, titleVisibility: .visible) {
+            Button("Remove Provider", role: .destructive) { remove() }
+            Button("Cancel", role: .cancel) { confirmRemove = false }
+        } message: {
+            Text("LCP removes the provider metadata and API key from this library's Keychain entry. Class context remains unchanged.")
+        }
+    }
+
+    private var redactedURL: String {
+        guard let url = URL(string: profile.baseURL), let host = url.host else { return "Invalid provider URL" }
+        let path = url.path == "/" ? "" : url.path
+        return "Endpoint · \(host)\(path)"
+    }
+
+    private func test() {
+        testing = true
+        status = nil
+        Task { @MainActor in
+            defer { testing = false }
+            do {
+                let key = try credentials.apiKey(for: profile)
+                let result = try await OpenAICompatibleAgentClient(profile: profile, apiKey: key).checkConnection()
+                _ = result
+                status = "Verified just now"
+            } catch {
+                status = error.localizedDescription
+            }
+        }
+    }
+
+    private func remove() {
+        do {
+            try credentials.remove(profile: profile)
+            onChanged()
+        } catch { status = error.localizedDescription }
+    }
+}
+
+struct NewBYOKProviderView: View {
+    @ObservedObject var model: WorkspaceModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = "OpenAI via sub2api"
+    @State private var baseURL = "https://sub2api.ihealth-eng.com/v1"
+    @State private var modelName = "gpt-6.2-sol"
+    @State private var apiKey = ""
+    @State private var testing = false
+    @State private var status: String?
+
+    private var credentials: AgentProviderCredentials { AgentProviderCredentials.forLibrary(model.rootURL) }
+    private var profile: AgentProviderProfile {
+        AgentProviderProfile(name: name.trimmingCharacters(in: .whitespacesAndNewlines), baseURL: baseURL.trimmingCharacters(in: .whitespacesAndNewlines), model: modelName.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    private var canSave: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !apiKey.isEmpty && !testing
+    }
+
+    var body: some View {
+        EditorFrame(title: "Add BYOK Provider", canSave: canSave, saveLabel: "Test & Save", height: 560, width: 680, save: testAndSave) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Bring your own key to use an OpenAI-compatible agent provider. LCP stores the key in the Mac Keychain and keeps it out of class backups and context exports.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    HStack {
+                        Button("Import from Codex config", systemImage: "arrow.down.doc") { importCodex() }
+                        Text("Reads ~/.codex/config.toml on this Mac")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Form {
+                        TextField("Connection name", text: $name, prompt: Text("OpenAI via sub2api"))
+                        TextField("Base URL", text: $baseURL, prompt: Text("https://provider.example/v1"))
+                            .textContentType(.URL)
+                        TextField("Model", text: $modelName, prompt: Text("gpt-6.2-sol"))
+                        SecureField("API key", text: $apiKey)
+                            .privacySensitive()
+                    }.formStyle(.grouped)
+                    HStack(spacing: 10) {
+                        Button(testing ? "Testing…" : "Test Connection") { test(saveAfter: false) }
+                            .disabled(!canSave)
+                        if let status { Text(status).font(.callout).foregroundStyle(.secondary) }
+                    }
+                    Text("The test sends a single short Responses API request with no class context and asks for a bounded reply. Future subscription support can use the same provider abstraction without requiring a personal key.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.padding(.bottom, 16)
+            }
+        }
+    }
+
+    private func importCodex() {
+        do {
+            let imported = try credentials.importCodexConfiguration()
+            baseURL = imported.baseURL
+            modelName = imported.model
+            apiKey = imported.apiKey
+            status = "Codex provider settings imported. Test the connection to continue."
+        } catch { status = error.localizedDescription }
+    }
+
+    private func testAndSave() { test(saveAfter: true) }
+
+    private func test(saveAfter: Bool) {
+        guard !testing else { return }
+        testing = true
+        status = nil
+        let nextProfile = profile
+        let nextKey = apiKey
+        Task { @MainActor in
+            defer { testing = false }
+            do {
+                let client = try OpenAICompatibleAgentClient(profile: nextProfile, apiKey: nextKey)
+                let result = try await client.checkConnection()
+                if saveAfter {
+                    try credentials.save(profile: nextProfile, apiKey: nextKey)
+                    model.notice = "BYOK provider connected. Its API key is stored in the Mac Keychain."
+                    dismiss()
+                } else {
+                    status = "Verified \(result.model) just now"
+                }
+            } catch {
+                status = error.localizedDescription
+            }
+        }
     }
 }
 

@@ -98,6 +98,21 @@ in the chosen service, select a source, then import it. The copy belongs to
 that LCP class. Importing the same remote item again picks up changes as a
 new revision. Saved citations can still open the earlier copy offline.
 
+## Agent provider connections
+
+Open **Agent Connections → Add BYOK Provider…** to connect an OpenAI-compatible
+Responses API endpoint with your own key. **Import from Codex config** reads the
+OpenAI provider section from `~/.codex/config.toml`, including the configured
+model. LCP tests the endpoint with one short request that contains no class
+context, then stores the key in the Mac Keychain after **Test & Save** succeeds.
+
+Provider metadata and keys stay outside the academic library, portable backups,
+MCP exports, and class context snapshots. A provider connection does not grant
+class access by itself. Create a separate scoped local agent grant when a local
+MCP client should read selected classes or materials. The current provider
+surface is BYOK. A future LCP subscription can use the same provider abstraction
+without requiring a personal key.
+
 - **UCI Canvas.** Open **Account → Settings → Approved Integrations** in
   UCI Canvas. If the university enables personal access tokens for your account,
   create one for your own LCP installation, then enter it under **Connections → UCI Canvas → Set Up**.

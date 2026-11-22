@@ -77,6 +77,7 @@ struct WorkspaceView: View {
                     ClassEditor(model: model, existing: course)
                 }
             case .newAgentGrant: NewAgentGrantView(model: model)
+            case .newBYOKProvider: NewBYOKProviderView(model: model)
             case .newActivity: ActivityEditor(model: model, existing: nil)
             case .newCoursework: CourseworkEditor(model: model, existing: nil)
             case .webLink(let classID, let revisionID):
@@ -170,6 +171,10 @@ private struct WorkspaceSidebar: View {
                                 Button("New Local Agent Grant…") {
                                     model.selection = .connections
                                     model.presentedEditor = .newAgentGrant
+                                }
+                                Button("Add BYOK Provider…") {
+                                    model.selection = .connections
+                                    model.presentedEditor = .newBYOKProvider
                                 }
                             }
                         row(.review, title: "Review Proposals", icon: "checkmark.bubble",

@@ -34,6 +34,12 @@ read or resource request, then refreshes that metadata on a later connection.
 Grok Bot offers manual file attachment. Source-grounded consumption and the
 OpenAI Dots and Claude Duet routes still require verification.
 
+BYOK agent provider profiles and API keys live in per-library Mac Keychain
+entries, outside `ContextState`, portable backups, context snapshots, and MCP
+configuration exports. The OpenAI-compatible Responses check sends a bounded
+test prompt without class context. A future subscription transport can reuse the
+provider abstraction without moving personal keys into academic state.
+
 ## Capture
 
 Local class capture uses the academic enrollment UUID and stores audio in the

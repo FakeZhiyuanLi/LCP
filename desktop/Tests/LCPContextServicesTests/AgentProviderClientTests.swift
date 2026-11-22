@@ -1,0 +1,94 @@
+import Foundation
+import XCTest
+@testable import LCPContextServices
+
+final class AgentProviderFixtureProtocol: URLProtocol {
+    static var status = 200
+    static var response: [String: Any] = ["id": "resp_fixture"]
+    static var requestBody: [String: Any] = [:]
+    static var authorization: String?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.authorization = request.value(forHTTPHeaderField: "Authorization")
+        let body = request.httpBody ?? requestBodyStreamData(request.httpBodyStream)
+        if let body,
+           let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+            Self.requestBody = object
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: Self.status,
+                                       httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        if Self.status < 300 {
+            let body = (try? JSONSerialization.data(withJSONObject: Self.response)) ?? Data()
+            client?.urlProtocol(self, didLoad: body)
+        }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+
+    private func requestBodyStreamData(_ stream: InputStream?) -> Data? {
+        guard let stream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var bytes = [UInt8](repeating: 0, count: 16_384)
+        var result = Data()
+        while stream.hasBytesAvailable {
+            let count = stream.read(&bytes, maxLength: bytes.count)
+            guard count > 0 else { break }
+            result.append(bytes, count: count)
+        }
+        return result.isEmpty ? nil : result
+    }
+}
+
+final class AgentProviderClientTests: XCTestCase {
+    private func client(model: String = "gpt-6.2-sol", key: String = "fixture-key") throws -> OpenAICompatibleAgentClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AgentProviderFixtureProtocol.self]
+        let http = UniversityHTTP(configuration: configuration)
+        let profile = AgentProviderProfile(name: "Fixture", baseURL: "https://provider.example/v1", model: model)
+        return try OpenAICompatibleAgentClient(profile: profile, apiKey: key, http: http)
+    }
+
+    override func setUp() {
+        super.setUp()
+        AgentProviderFixtureProtocol.status = 200
+        AgentProviderFixtureProtocol.response = ["id": "resp_fixture"]
+        AgentProviderFixtureProtocol.requestBody = [:]
+        AgentProviderFixtureProtocol.authorization = nil
+    }
+
+    func testResponsesCheckUsesTheConfiguredModelAndDoesNotSendClassContext() async throws {
+        let result = try await client().checkConnection()
+
+        XCTAssertEqual(result.model, "gpt-6.2-sol")
+        XCTAssertEqual(result.endpoint.absoluteString, "https://provider.example/v1/responses")
+        XCTAssertEqual(result.requestID, "resp_fixture")
+        XCTAssertEqual(AgentProviderFixtureProtocol.authorization, "Bearer fixture-key")
+        let payload = try JSONSerialization.jsonObject(with: OpenAICompatibleAgentClient.requestBody(model: "gpt-6.2-sol")) as? [String: Any]
+        XCTAssertEqual(payload?["model"] as? String, "gpt-6.2-sol")
+        XCTAssertEqual(payload?["store"] as? Bool, false)
+        XCTAssertNil(payload?["class"])
+        XCTAssertNil(payload?["context"])
+    }
+
+    func testConfigurationRejectsInsecureOrCredentialBearingURLs() {
+        XCTAssertThrowsError(try AgentProviderProfile.validateBaseURL("http://provider.example/v1"))
+        XCTAssertThrowsError(try AgentProviderProfile.validateBaseURL("https://user:pass@provider.example/v1"))
+        XCTAssertThrowsError(try AgentProviderProfile.validateBaseURL("https://provider.example/v1?api_key=secret"))
+        XCTAssertThrowsError(try AgentProviderProfile.validateAPIKey("fixture key"))
+    }
+
+    func testUnauthorizedProviderResponseIsMappedWithoutExposingResponseBody() async throws {
+        AgentProviderFixtureProtocol.status = 401
+        do {
+            _ = try await client().checkConnection()
+            XCTFail("Expected the provider to reject the key")
+        } catch let error as AgentProviderError {
+            XCTAssertEqual(error, .http(401))
+            XCTAssertEqual(error.errorDescription, "The provider rejected the API key. Check the key and reconnect.")
+        }
+    }
+}

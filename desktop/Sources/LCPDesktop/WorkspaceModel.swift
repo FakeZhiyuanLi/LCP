@@ -816,7 +816,7 @@ struct WorkspaceClassGroup: Identifiable {
 enum LibraryTransfer { case backup, restore }
 enum WorkspaceRoute: Hashable, Codable { case welcome, capture, universityConnections, classDetail(UUID), connections, review }
 enum WorkspaceEditor: Hashable, Identifiable {
-    case newTerm, editTerm, newClass, newActivity, newCoursework, newAgentGrant
+    case newTerm, editTerm, newClass, newActivity, newCoursework, newAgentGrant, newBYOKProvider
     case editClass(UUID)
     case webLink(classID: UUID, revisionID: UUID?)
     case universityServices(classID: UUID, source: UniversitySource = .canvas)
