@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f8f7f0">
+  <title>LCP — Your university class library for Mac</title>
+  <meta name="description" content="Organize university readings, lecture recordings, and notes on your Mac. Find the original passage and share selected sources with your agents.">
+  <link rel="canonical" href="https://lcp.betanine.dev/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="LCP — Your university class library for Mac">
+  <meta property="og:description" content="Keep your lectures, readings, and notes together in a local class library.">
+  <meta property="og:url" content="https://lcp.betanine.dev/">
+  <meta property="og:image" content="https://lcp.betanine.dev/assets/class-library.webp">
+  <link rel="icon" href="assets/lcp-icon.png" type="image/png">
+  <link rel="apple-touch-icon" href="assets/lcp-icon.png">
+  <link rel="preload" href="assets/fonts/instrument-serif-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="site.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="top">
+    <div class="shell top-inner">
+      <a class="brand" href="./" aria-label="LCP home"><img src="assets/lcp-icon.png" alt="" width="40" height="40"><span>LCP</span></a>
+      <nav aria-label="Main navigation">
+        <a href="#workspace">Workspace</a>
+        <a href="#install">Install</a>
+        <a class="repo-link" href="https://github.com/FakeZhiyuanLi/LCP">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="content">
+    <section class="hero shell" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <a class="release-link" href="https://github.com/FakeZhiyuanLi/LCP/releases/tag/v0.4.10"><span class="release-dot" aria-hidden="true"></span>Mac preview <span class="version">v0.4.10</span><span aria-hidden="true">↗</span></a>
+        <h1 id="hero-title">Your classes,<br><em>in context.</em></h1>
+        <p class="intro">Keep lecture recordings, readings, and notes in one searchable class library on your Mac. Share the exact sources with your AI assistant.</p>
+        <div class="actions">
+          <a class="button primary" href="/download"><span class="download-icon" aria-hidden="true">↓</span> Download for Mac</a>
+          <a class="text-link" href="https://github.com/FakeZhiyuanLi/LCP/blob/v0.4.10/desktop/GETTING-STARTED.md">Quick start <span aria-hidden="true">→</span></a>
+        </div>
+        <p class="requirements">Apple Silicon <span aria-hidden="true">·</span> macOS 14 or later</p>
+      </div>
+
+      <figure class="tour" aria-label="LCP Desktop screenshot gallery">
+        <div class="preview-stage" id="preview-stage">
+          <div class="app-window" id="app-window">
+            <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>LCP Desktop</span></div>
+            <a id="preview-link" class="preview-link" href="assets/class-library.webp" aria-label="Enlarge the class library preview">
+              <img id="preview-image" src="assets/class-library.webp" width="1760" height="957" alt="LCP class library with Data Structures, World Literature, and Ethics and Technology, plus recent course materials." fetchpriority="high">
+            </a>
+          </div>
+          <a class="expand" id="expand" href="assets/class-library.webp" aria-label="Enlarge preview"><span aria-hidden="true">⤢</span></a>
+        </div>
+        <figcaption>
+          <div class="views" role="group" aria-label="Choose a workspace preview">
+            <a href="assets/class-library.webp" data-view="library" aria-current="true">Class library</a>
+            <a href="assets/materials.webp" data-view="materials">Materials</a>
+            <a href="assets/share.webp" data-view="sharing">Sharing</a>
+          </div>
+          <span class="counter" aria-hidden="true" id="counter">1 / 3</span>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section id="workspace" class="workflow">
+      <div class="shell">
+        <div class="section-intro">
+          <h2>Inside the <em>workspace.</em></h2>
+          <p>Record on Monday. Find the passage you need when it’s time to study.</p>
+        </div>
+        <div class="features">
+          <article class="feature">
+            <div class="feature-art wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <h3>Record a lecture</h3>
+            <p>Pick a class, press Record, and save the audio to its lecture history. Recordings stay on your Mac unless you set up a synced destination.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-art passage" aria-hidden="true"><i></i><i></i><i></i></div>
+            <h3>Return to the source</h3>
+            <p>Search class readings and saved transcripts. A citation takes you back to the exact passage you kept, even after a source is revised.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-art share-art" aria-hidden="true"><i></i><i></i><i></i></div>
+            <h3>Give an agent context</h3>
+            <p>Choose the materials to share. Export a readable file for chat, or grant a compatible MCP client access to selected class sources.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="install" class="install shell">
+      <div><h2>Get LCP <em>for Mac.</em></h2>
+        <p>Open the disk image and drag <strong>LCP Desktop</strong> into <strong>Applications</strong>. This preview uses an ad-hoc signature. If macOS asks you to approve the first launch, follow <a href="https://support.apple.com/en-us/102445">Apple’s instructions</a>.</p>
+      </div>
+      <div class="install-actions">
+        <a class="button primary" href="/download"><span class="download-icon" aria-hidden="true">↓</span> Download for Mac</a>
+        <a class="text-link" href="https://github.com/FakeZhiyuanLi/LCP/blob/v0.4.10/desktop/GETTING-STARTED.md">Set up your first class <span aria-hidden="true">↗</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer><div class="shell footer-inner">
+    <a class="brand" href="./" aria-label="LCP home"><img src="assets/lcp-icon.png" alt="" width="32" height="32"><span>LCP</span></a>
+    <nav aria-label="Project links">
+      <a href="https://github.com/FakeZhiyuanLi/LCP/releases/tag/v0.4.10">Release notes</a>
+      <a href="https://github.com/FakeZhiyuanLi/LCP">Source code ↗</a>
+    </nav>
+  </div></footer>
+
+  <dialog id="lightbox" aria-labelledby="lightbox-title">
+    <div class="dialog-bar"><h2 id="lightbox-title">Class library</h2><form method="dialog"><button type="submit" autofocus aria-label="Close preview">Close <span aria-hidden="true">×</span></button></form></div>
+    <img id="large-preview" alt="" width="1760" height="957">
+  </dialog>
+</body>
+</html>

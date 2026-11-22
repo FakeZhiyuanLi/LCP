@@ -4,7 +4,7 @@ LCP keeps a university class’s readings, lecture recordings, coursework, and n
 
 ## Install on a Mac
 
-The desktop preview runs on **Apple Silicon with macOS 14 or later**. Download the disk image from GitHub Releases, open it, and drag **LCP Desktop** into **Applications**. This preview uses an ad-hoc signature. macOS may require you to approve the first launch in **System Settings → Privacy & Security**. The release page includes a SHA-256 checksum. [Download LCP Desktop](https://github.com/FakeZhiyuanLi/LCP/releases) · [Apple’s guide to opening apps you trust](https://support.apple.com/en-us/102445)
+The desktop preview runs on **Apple Silicon with macOS 14 or later**. Download the disk image from GitHub Releases, open it, and drag **LCP Desktop** into **Applications**. This preview uses an ad-hoc signature. macOS may require you to approve the first launch in **System Settings → Privacy & Security**. The release page includes a SHA-256 checksum. [Download LCP Desktop](https://lcp.betanine.dev/) · [GitHub releases](https://github.com/FakeZhiyuanLi/LCP/releases) · [Apple’s guide to opening apps you trust](https://support.apple.com/en-us/102445)
 
 In **Class Library**, choose **New Class…** and enter a name. Open the class and choose **Materials → Add Material → Import Files…** to add your first reading. In **Capture**, select the class and choose **Start Recording**. Choose **Stop and Finalize** to save the audio under **Lectures**. [Quick start](desktop/GETTING-STARTED.md)
 
