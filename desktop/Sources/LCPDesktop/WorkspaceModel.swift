@@ -609,22 +609,28 @@ final class WorkspaceModel: ObservableObject {
 
     func openPlanner(for classID: UUID? = nil) {
         let target = classID ?? selectedClassID
-        guard let target, state.classes.contains(where: { $0.id == target }) else { return }
-        inWorkspace("Open Class Planner") { [self] in
-            selection = .classDetail(target)
-            // The class page owns the planner tab, so selecting it remains a
-            // normal workspace navigation action and does not create a second
-            // window or an unscoped context request.
-            plannerClassID = target
+        inWorkspace(target == nil ? "Open Study Planner" : "Open Class Planner") { [self] in
+            if let target {
+                guard state.classes.contains(where: { $0.id == target }) else { return }
+                selection = .classDetail(target)
+                // The class page owns the planner tab, so selecting it remains a
+                // normal workspace navigation action and does not create a second
+                // window or an unscoped context request.
+                plannerClassID = target
+            } else {
+                selection = .planner
+            }
         }
     }
 
     @Published var plannerClassID: UUID?
 
-    func saveAgentPlan(classID: UUID, objective: String, plan: String, profile: AgentProviderProfile,
+    func saveAgentPlan(classIDs: [UUID], objective: String, plan: String, profile: AgentProviderProfile,
                        context: ClassPlannerContext) {
-        guard context.classIDs == [classID], state.classes.contains(where: { $0.id == classID }) else {
-            errorMessage = "Save this plan from the same class whose context was reviewed."
+        guard !classIDs.isEmpty, classIDs.count <= 32, Set(classIDs).count == classIDs.count,
+              context.classIDs == classIDs,
+              classIDs.allSatisfy({ id in state.classes.contains(where: { $0.id == id }) }) else {
+            errorMessage = "Save this plan from the same classes whose context was reviewed."
             return
         }
         let trimmedPlan = plan.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -643,18 +649,32 @@ final class WorkspaceModel: ObservableObject {
             errorMessage = "The planning request and generated plan exceed the class-history size limit."
             return
         }
-        let classLabel = state.classes.first(where: { $0.id == classID })?.shortLabel ?? "Class"
-        let title = "Agent plan · \(classLabel) · \(Date.now.formatted(date: .abbreviated, time: .shortened))"
-        let citations = Array(context.sourceCitations.prefix(128))
+        let selectedIDs = Set(classIDs)
+        guard context.sourceCitations.allSatisfy({ selectedIDs.contains($0.classID) }),
+              context.sourceCitations.count <= 128 else {
+            errorMessage = "The reviewed planner context contains an invalid source manifest. Refresh it and try again."
+            return
+        }
+        let citationsByClass = Dictionary(grouping: context.sourceCitations, by: \.classID)
+        let timestamp = Date.now
+        let entries: [(classID: UUID, label: String, citations: [SourceCitation])] = classIDs.map { id in
+            let label = state.classes.first(where: { $0.id == id })?.shortLabel ?? "Class"
+            return (id, label, citationsByClass[id] ?? [])
+        }
         let revisionBeforeSave = state.revision
         mutate { state in
-            state.activities.append(ActivityEntry(classID: classID, kind: "agent_plan", title: title,
-                                                  body: historyBody, citations: citations,
-                                                  agentIdentity: profile.name,
-                                                  inputContextManifest: citations))
+            for entry in entries {
+                let title = "Agent plan · \(entry.label) · \(timestamp.formatted(date: .abbreviated, time: .shortened))"
+                state.activities.append(ActivityEntry(classID: entry.classID, kind: "agent_plan", title: title,
+                                                      body: historyBody, citations: entry.citations,
+                                                      agentIdentity: profile.name,
+                                                      inputContextManifest: entry.citations))
+            }
         }
         if state.revision != revisionBeforeSave {
-            notice = "Saved the reviewed plan to \(classLabel)'s history."
+            let labels = entries.map(\.label)
+            let destination = labels.count == 1 ? "\(labels[0])'s history" : "\(labels.count) class histories"
+            notice = "Saved the reviewed plan to \(destination)."
             plannerClassID = nil
         }
     }
@@ -866,7 +886,7 @@ struct WorkspaceClassGroup: Identifiable {
 }
 
 enum LibraryTransfer { case backup, restore }
-enum WorkspaceRoute: Hashable, Codable { case welcome, capture, universityConnections, classDetail(UUID), connections, review }
+enum WorkspaceRoute: Hashable, Codable { case welcome, capture, universityConnections, planner, classDetail(UUID), connections, review }
 enum WorkspaceEditor: Hashable, Identifiable {
     case newTerm, editTerm, newClass, newActivity, newCoursework, newAgentGrant, newBYOKProvider
     case editClass(UUID)

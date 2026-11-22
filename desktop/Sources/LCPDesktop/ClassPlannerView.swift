@@ -4,10 +4,12 @@ import LCPContextServices
 
 struct ClassPlannerView: View {
     @ObservedObject var model: WorkspaceModel
-    let classID: UUID
+    let classID: UUID?
+    let globalScope: Bool
 
     @State private var profiles: [AgentProviderProfile] = []
     @State private var selectedProfileID: UUID?
+    @State private var selectedClassIDs: Set<UUID> = []
     @State private var objective = "Help me plan what to do next for this class. Prioritize urgent coursework and the highest-value review."
     @State private var context: ClassPlannerContext?
     @State private var plan: String?
@@ -16,8 +18,30 @@ struct ClassPlannerView: View {
     @State private var status: String?
 
     private var credentials: AgentProviderCredentials { AgentProviderCredentials.forLibrary(model.rootURL) }
-    private var enrollment: ClassEnrollment? { model.state.classes.first { $0.id == classID } }
     private var selectedProfile: AgentProviderProfile? { profiles.first { $0.id == selectedProfileID } }
+    private var activeClasses: [ClassEnrollment] {
+        model.state.classes.filter { !$0.archived }.sorted {
+            let order = $0.shortLabel.localizedStandardCompare($1.shortLabel)
+            if order != .orderedSame { return order == .orderedAscending }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+    }
+    private var activeClassIDs: [UUID] {
+        if let classID { return [classID] }
+        return activeClasses.filter { selectedClassIDs.contains($0.id) }.map(\.id)
+    }
+
+    init(model: WorkspaceModel, classID: UUID) {
+        self.model = model
+        self.classID = classID
+        self.globalScope = false
+    }
+
+    init(model: WorkspaceModel, globalScope: Bool) {
+        self.model = model
+        self.classID = nil
+        self.globalScope = globalScope
+    }
 
     var body: some View {
         ScrollView {
@@ -26,6 +50,7 @@ struct ClassPlannerView: View {
                 if profiles.isEmpty {
                     noProvider
                 } else {
+                    if globalScope { scopeCard }
                     requestCard
                     contextCard
                     if let plan { resultCard(plan) }
@@ -36,11 +61,22 @@ struct ClassPlannerView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onAppear {
+            let initialIDs = activeClassIDs
+            if globalScope && selectedClassIDs.isEmpty {
+                selectedClassIDs = Set(activeClasses.map(\.id))
+            }
             refreshProfiles()
-            refreshContext()
+            refreshContext(classIDs: initialIDs.isEmpty && globalScope ? activeClasses.map(\.id) : initialIDs)
         }
         .onChange(of: model.rootURL) { _, _ in
             refreshProfiles()
+            refreshContext()
+        }
+        .onChange(of: selectedClassIDs) { _, _ in
+            guard globalScope else { return }
+            refreshContext()
+        }
+        .onChange(of: model.state.revision) { _, _ in
             refreshContext()
         }
     }
@@ -48,12 +84,14 @@ struct ClassPlannerView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline) {
-                Label("Class planner", systemImage: "sparkles")
+                Label(globalScope ? "Study planner" : "Class planner", systemImage: "sparkles")
                     .font(.title2.weight(.semibold))
                 Spacer()
                 if generating { ProgressView().controlSize(.small) }
             }
-            Text("Ask an agent to turn this class's materials, coursework, notes, and available lecture transcripts into a practical next-step plan.")
+            Text(globalScope
+                 ? "Ask an agent to coordinate your classes using their materials, coursework, notes, and available lecture transcripts."
+                 : "Ask an agent to turn this class's materials, coursework, notes, and available lecture transcripts into a practical next-step plan.")
                 .font(.callout)
                 .foregroundStyle(WorkspacePalette.muted)
             Text("LCP sends a fresh, bounded snapshot for each request. Source text is treated as study data, and no official class record is changed automatically.")
@@ -77,6 +115,52 @@ struct ClassPlannerView: View {
                     model.selection = .connections
                 }
                 .buttonStyle(.bordered)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WorkspacePalette.line) }
+    }
+
+    private var scopeCard: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(alignment: .firstTextBaseline) {
+                Label("Classes in this plan", systemImage: "books.vertical")
+                    .font(.headline)
+                Spacer()
+                Button("Select all active") {
+                    selectedClassIDs = Set(activeClasses.map(\.id))
+                }
+                .buttonStyle(.borderless)
+                Button("Clear") { selectedClassIDs.removeAll() }
+                    .buttonStyle(.borderless)
+            }
+            Text("LCP will use the selected classes as one bounded context. Choose fewer classes for a focused plan.")
+                .font(.caption)
+                .foregroundStyle(WorkspacePalette.muted)
+            if activeClasses.isEmpty {
+                Text("Create a class before opening a multi-class plan.")
+                    .font(.callout)
+                    .foregroundStyle(WorkspacePalette.muted)
+            } else {
+                ForEach(activeClasses) { course in
+                    Toggle(isOn: Binding(
+                        get: { selectedClassIDs.contains(course.id) },
+                        set: { selected in
+                            if selected { selectedClassIDs.insert(course.id) }
+                            else { selectedClassIDs.remove(course.id) }
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(course.shortLabel)
+                            if course.displayLabel != course.title {
+                                Text(course.title).font(.caption).foregroundStyle(WorkspacePalette.muted)
+                            }
+                        }
+                    }
+                    .accessibilityLabel("Include \(course.shortLabel) in plan")
+                }
             }
         }
         .padding(18)
@@ -116,7 +200,7 @@ struct ClassPlannerView: View {
                     generate()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(generating || selectedProfile == nil || objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(generating || activeClassIDs.isEmpty || selectedProfile == nil || objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             if let status { Text(status).font(.caption).foregroundStyle(.orange) }
         }
@@ -148,7 +232,9 @@ struct ClassPlannerView: View {
                     }
                 }
             } else {
-                Text("LCP is preparing a verified snapshot of this class.")
+                Text(activeClassIDs.isEmpty
+                     ? "Select at least one class to prepare a verified context snapshot."
+                     : "LCP is preparing a verified snapshot of \(globalScope ? "the selected classes" : "this class").")
                     .font(.callout)
                     .foregroundStyle(WorkspacePalette.muted)
             }
@@ -164,9 +250,9 @@ struct ClassPlannerView: View {
                 Label("Generated plan", systemImage: "checklist")
                     .font(.headline)
                 Spacer()
-                Button("Save to Class History") {
+                Button(globalScope ? "Save to Class Histories" : "Save to Class History") {
                     guard let context, let profile = selectedProfile else { return }
-                    model.saveAgentPlan(classID: classID, objective: objective, plan: plan, profile: profile, context: context)
+                    model.saveAgentPlan(classIDs: context.classIDs, objective: objective, plan: plan, profile: profile, context: context)
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -202,18 +288,29 @@ struct ClassPlannerView: View {
         } catch { status = error.localizedDescription }
     }
 
-    private func refreshContext() {
+    private func refreshContext(classIDs: [UUID]? = nil) {
         guard let repository = model.repository else { return }
+        let requestedIDs = classIDs ?? activeClassIDs
+        guard !requestedIDs.isEmpty else {
+            context = nil
+            loadingContext = false
+            return
+        }
         loadingContext = true
         status = nil
         do {
-            context = try ClassPlannerService(repository: repository).makeContext(classIDs: [classID])
+            context = try ClassPlannerService(repository: repository).makeContext(classIDs: requestedIDs)
         } catch { status = error.localizedDescription }
         loadingContext = false
     }
 
     private func generate() {
         guard let repository = model.repository, let profile = selectedProfile else { return }
+        let requestedClassIDs = activeClassIDs
+        guard !requestedClassIDs.isEmpty else {
+            status = "Select at least one class before generating a plan."
+            return
+        }
         let key: String
         do { key = try credentials.apiKey(for: profile) }
         catch { status = error.localizedDescription; return }
@@ -225,7 +322,7 @@ struct ClassPlannerView: View {
             defer { generating = false }
             do {
                 let result = try await ClassPlannerService(repository: repository).generate(
-                    classIDs: [classID], objective: request, profile: profile, apiKey: key)
+                    classIDs: requestedClassIDs, objective: request, profile: profile, apiKey: key)
                 context = result.context
                 plan = result.response.text
             } catch is CancellationError {

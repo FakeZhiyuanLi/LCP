@@ -24,6 +24,7 @@ struct WorkspaceView: View {
                         } else { WelcomeView(model: model) }
                     case .capture: CaptureWorkspaceView(model: model)
                     case .universityConnections: ConnectionsOverview(model: model).id(model.rootURL)
+                    case .planner: ClassPlannerView(model: model, globalScope: true)
                     case .connections: AgentConnectionsView(model: model)
                     case .review: ProposalReviewView(model: model)
                     default: WelcomeView(model: model)
@@ -108,7 +109,7 @@ private struct WorkspaceSidebar: View {
     private var visibleRoutes: [WorkspaceRoute] {
         [.welcome, .capture, .universityConnections] + model.visibleClassGroups.flatMap { group in
             group.classes.map { .classDetail($0.id) }
-        } + [.connections, .review]
+        } + [.planner, .connections, .review]
     }
 
     var body: some View {
@@ -165,6 +166,10 @@ private struct WorkspaceSidebar: View {
                             .font(.system(size: 11, weight: .semibold)).foregroundStyle(WorkspacePalette.muted)
                             .padding(.leading, 9).padding(.top, 20).padding(.bottom, 4)
                             .accessibilityAddTraits(.isHeader)
+                        row(.planner, title: "Study Planner", icon: "sparkles")
+                            .contextMenu {
+                                Button("Open Study Planner") { model.selection = .planner }
+                            }
                         row(.connections, title: "Agent Connections", icon: "point.3.connected.trianglepath.dotted")
                             .contextMenu {
                                 Button("Open Agent Connections") { model.selection = .connections }

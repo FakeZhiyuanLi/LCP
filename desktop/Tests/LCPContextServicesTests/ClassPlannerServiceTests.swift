@@ -65,6 +65,44 @@ final class ClassPlannerServiceTests: XCTestCase {
     }
 
     @MainActor
+    func testPlannerContextScopesMultipleClassesAndKeepsTheirCitations() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("LCP-Planner-Multi-(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = try ContextRepository(rootURL: root)
+        let first = ClassEnrollment(courseCode: "SYN 46", title: "Synthetic Algorithms")
+        let second = ClassEnrollment(courseCode: "SYN 9", title: "Synthetic Literature")
+        try repository.update { state in
+            state.classes.append(contentsOf: [first, second])
+            state.activities.append(ActivityEntry(classID: first.id, title: "Algorithms note", body: "Review hashing before the next meeting."))
+            state.activities.append(ActivityEntry(classID: second.id, title: "Literature note", body: "Compare the two fictional narrators."))
+        }
+        let firstURL = root.deletingLastPathComponent().appendingPathComponent("planner-first-(UUID().uuidString).md")
+        let secondURL = root.deletingLastPathComponent().appendingPathComponent("planner-second-(UUID().uuidString).md")
+        defer {
+            try? FileManager.default.removeItem(at: firstURL)
+            try? FileManager.default.removeItem(at: secondURL)
+        }
+        try Data("# Algorithms\n\nHashing notes.".utf8).write(to: firstURL)
+        try Data("# Literature\n\nNarrator notes.".utf8).write(to: secondURL)
+        _ = try MaterialService(repository: repository).importMaterial(from: firstURL, classID: first.id)
+        _ = try MaterialService(repository: repository).importMaterial(from: secondURL, classID: second.id)
+
+        let context = try ClassPlannerService(repository: repository).makeContext(classIDs: [first.id, second.id], maxBytes: 256 * 1_024)
+
+        XCTAssertEqual(context.classIDs, [first.id, second.id])
+        XCTAssertEqual(Set(context.classLabels), Set(["SYN 46: Synthetic Algorithms", "SYN 9: Synthetic Literature"]))
+        XCTAssertTrue(context.markdown.contains("Algorithms note"))
+        XCTAssertTrue(context.markdown.contains("Literature note"))
+        XCTAssertTrue(context.markdown.contains("Hashing notes"))
+        XCTAssertTrue(context.markdown.contains("Narrator notes"))
+        XCTAssertGreaterThanOrEqual(context.sourceCount, 4)
+        XCTAssertFalse(context.sourceCitations.isEmpty)
+        XCTAssertTrue(context.sourceCitations.allSatisfy { [first.id, second.id].contains($0.classID) })
+        XCTAssertTrue(context.sourceCitations.contains { $0.classID == first.id })
+        XCTAssertTrue(context.sourceCitations.contains { $0.classID == second.id })
+    }
+
+    @MainActor
     func testGenerateSendsTheReviewedContextAndReturnsTheProviderAnswer() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("LCP-Planner-Generate-" + UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }

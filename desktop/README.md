@@ -127,6 +127,13 @@ History** creates an attributed, citation-backed `agent_plan` entry. Generating
 or saving a plan does not edit Canvas, Drive, Gmail, Gradescope, deadlines,
 grades, or recordings.
 
+Use **Study Planner** in the sidebar or **Study Planner…** from the main menu for
+a cross-class plan. LCP selects all active classes by default, and you can clear
+the selection or choose a smaller set before reviewing the context snapshot.
+Saving a cross-class answer creates one class-scoped history entry per selected
+class, with only that class's cited inputs attached to its entry. Archived classes
+are excluded from the default selection.
+
 - **UCI Canvas.** Open **Account → Settings → Approved Integrations** in
   UCI Canvas. If the university enables personal access tokens for your account,
   create one for your own LCP installation, then enter it under **Connections → UCI Canvas → Set Up**.
