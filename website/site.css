@@ -168,3 +168,155 @@ dialog::backdrop { background: #10251fd9; }
   .top nav { gap: 10px; }
   .views a { padding-inline: 9px; }
 }
+
+/* LCP study-room direction */
+:root {
+  --night: #0c2828;
+  --night-soft: #153735;
+  --lime: #c9d89d;
+  --night-muted: #b9cdc0;
+}
+body { background: var(--paper); }
+.top {
+  color: #f5f2e8;
+  background: var(--night);
+  border-bottom-color: #79948b3b;
+}
+.top nav a:hover, .top .text-link:hover, .top .release-link:hover { color: var(--lime); }
+.hero {
+  position: relative;
+  min-height: min(780px, calc(100vh - 76px));
+  color: #f5f2e8;
+  background: var(--night);
+}
+.hero::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  content: "";
+  opacity: .9;
+  background: radial-gradient(circle at 8% 22%, #2d6b5555, transparent 33%),
+    radial-gradient(circle at 85% 30%, #c9d89d19, transparent 28%);
+}
+.hero > * { position: relative; z-index: 1; }
+.release-link { color: #d8dfc9; }
+.release-dot { background: var(--lime); box-shadow: 0 0 0 4px #c9d89d1c; }
+.version { color: #9eb9a2; }
+h1 {
+  max-width: 7.5em;
+  color: #f6f2e8;
+  font-size: clamp(74px, 8.25vw, 126px);
+  letter-spacing: -.045em;
+  line-height: .82;
+}
+h1 em, h2 em { color: var(--lime); }
+.intro { color: var(--night-muted); }
+.primary {
+  color: var(--night);
+  background: var(--lime);
+  box-shadow: 0 0 0 1px #e0e9b5, 0 10px 28px #0003;
+}
+.primary:hover { background: #e1edb8; }
+.text-link { color: #f5f2e8; }
+.requirements, .counter { color: #9eb9a2; }
+.preview-stage {
+  overflow: hidden;
+  border-color: #a5bb8c4d;
+  border-radius: 18px;
+  background: #1b5147 url("assets/page-lines.webp") center/cover;
+  box-shadow: 0 28px 70px #0005;
+}
+.preview-stage::after {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  content: "";
+  background: linear-gradient(140deg, #0d2e2a33, transparent 50%, #c9d89d30);
+}
+.app-window {
+  z-index: 2;
+  width: 83%;
+  border: 1px solid #f9f8e675;
+  box-shadow: 0 19px 38px #031b15a6, 0 2px 4px #031b1570;
+  transform: rotate(-1.1deg);
+}
+.sheet .app-window { width: 50%; }
+.expand {
+  right: 15px;
+  bottom: 15px;
+  z-index: 3;
+  width: 40px;
+  height: 40px;
+  color: var(--night);
+  background: var(--lime);
+  border-color: #d9e4bf8c;
+}
+.expand:hover { background: #e1edb8; }
+.orbit {
+  position: absolute;
+  z-index: 1;
+  border: 1px solid #bed6956e;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.orbit-one { width: 92%; aspect-ratio: 1.62; transform: rotate(-26deg); }
+.orbit-two { width: 116%; aspect-ratio: 1.1; transform: rotate(37deg); border-color: #bed69535; }
+.orbit-label {
+  position: absolute;
+  z-index: 1;
+  color: #d7e4b7;
+  font-size: .58rem;
+  font-weight: 700;
+  letter-spacing: .15em;
+}
+.label-top { top: 8%; left: 21%; }
+.label-right { right: 6%; top: 42%; writing-mode: vertical-rl; }
+.label-bottom { bottom: 8%; left: 26%; }
+.views a { color: #a8c0a7; }
+.views a[aria-current="true"] { color: var(--night); background: var(--lime); }
+.views a:hover { color: #fff; background: #3c6659; }
+.workflow { background: var(--paper); }
+.section-intro {
+  display: grid;
+  grid-template-columns: .75fr 1.25fr;
+  align-items: end;
+  column-gap: 40px;
+}
+.section-intro .eyebrow { grid-column: 1 / -1; margin-bottom: 16px; }
+.section-intro h2 { grid-column: 1; }
+.section-intro > p:last-child { grid-column: 2; max-width: 25em; padding-bottom: 4px; }
+.feature + .feature { border-left-color: var(--line); }
+.feature-art { color: var(--green); }
+.install {
+  color: #f5f2e8;
+  background: var(--night);
+}
+.install .eyebrow { color: var(--lime); margin-bottom: 17px; }
+.install h2 { color: #f5f2e8; }
+.install p { color: #b9cdc0; }
+.install p strong, .install-actions .text-link { color: #f5f2e8; }
+.install p a { color: var(--lime); }
+footer { background: #081d1d; }
+@media (prefers-reduced-motion: no-preference) {
+  .orbit-one { animation: orbit 22s linear infinite; }
+  .orbit-two { animation: orbit-reverse 29s linear infinite; }
+  .app-window { animation: settle .8s cubic-bezier(.2,.8,.2,1) both; }
+  @keyframes settle { from { opacity: 0; transform: translateY(16px) rotate(-1.1deg); } to { opacity: 1; transform: rotate(-1.1deg); } }
+  @keyframes orbit { to { transform: rotate(334deg); } }
+  @keyframes orbit-reverse { to { transform: rotate(-323deg); } }
+}
+@media (max-width: 720px) {
+  .hero { min-height: auto; padding-block: 58px 52px; }
+  h1 { max-width: 7em; font-size: clamp(70px, 17vw, 101px); }
+  .section-intro { display: block; }
+  .section-intro .eyebrow { margin-bottom: 14px; }
+  .section-intro > p:last-child { margin-top: 17px; }
+  .install { padding-block: 57px 66px; }
+}
+
+/* Let the study-room canvas run full bleed while the content stays measured. */
+.hero, .install {
+  box-shadow: 0 0 0 100vmax var(--night);
+}
