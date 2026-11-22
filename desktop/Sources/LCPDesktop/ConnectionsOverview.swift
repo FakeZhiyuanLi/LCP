@@ -62,7 +62,10 @@ struct ConnectionsOverview: View {
         .onAppear(perform: refresh)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
         .sheet(item: $managing, onDismiss: refresh) { service in
-            UniversityConnectionManager(service: service, model: model, onChange: refresh)
+            UniversityConnectionManager(service: service, model: model, onChange: {
+                refresh()
+                if service == .canvas { model.syncCanvasNow() }
+            })
         }
     }
 

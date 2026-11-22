@@ -118,6 +118,9 @@ private struct UniversitySourceBrowser: View {
     @State private var courseworkReview: CourseworkImportReview?
 
     private var credentials: UniversityCredentials { .forLibrary(model.rootURL) }
+    private var linkedCanvasCourseID: String? {
+        model.state.classes.first(where: { $0.id == classID })?.canvasCourseID
+    }
     private var selectedItem: UniversityItem? { items.first { $0.id == selectedID } }
     private var selectedAttachment: UniversityItem? {
         guard source == .gmail, selectedItem?.id == attachmentMessageID else { return nil }
@@ -224,7 +227,14 @@ private struct UniversitySourceBrowser: View {
                 }
             }
         }
-        .onAppear { readConnection() }
+        .onAppear {
+            readConnection()
+            if source == .canvas,
+               UniversityConnectionStatus.read(source, credentials: credentials).isConfigured,
+               !loadedCourses {
+                loadCourses()
+            }
+        }
         .onDisappear { cancelRequest() }
         .sheet(isPresented: $managingConnection) {
             UniversityConnectionManager(service: source, model: model, onChange: connectionChanged)
@@ -243,6 +253,32 @@ private struct UniversitySourceBrowser: View {
     }
 
     @ViewBuilder private var canvasControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: linkedCanvasCourseID == nil ? "link" : "checkmark.circle.fill")
+                    .foregroundStyle(linkedCanvasCourseID == nil ? WorkspacePalette.muted : .green)
+                if let linkedCanvasCourseID {
+                    Text("Linked for automatic refresh")
+                    if let linked = courses.first(where: { $0.id == linkedCanvasCourseID }) {
+                        Text(linked.detail.isEmpty ? linked.title : "· \(linked.detail)")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Choose the matching Canvas course to enable automatic refresh.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.callout)
+            if linkedCanvasCourseID == nil, let courseID {
+                Button("Link Selected Course for Automatic Refresh") {
+                    model.linkCanvasCourse(classID: classID, courseID: courseID)
+                }
+            } else if let linkedCanvasCourseID, let courseID, linkedCanvasCourseID != courseID {
+                Button("Use Selected Course for Automatic Refresh") {
+                    model.linkCanvasCourse(classID: classID, courseID: courseID)
+                }
+            }
+        }
         Button(loadedCourses ? "Refresh Courses" : "Load My Courses") { loadCourses() }
             .disabled(isBusy)
         if !courses.isEmpty {
@@ -316,6 +352,7 @@ private struct UniversitySourceBrowser: View {
         query = ""
         resetItems()
         readConnection()
+        if source == .canvas { model.syncCanvasNow() }
     }
 
     private func loadCourses(cursor: String? = nil) {
@@ -334,6 +371,10 @@ private struct UniversitySourceBrowser: View {
             append(page.items, to: &courses)
             courseCursor = page.next
             loadedCourses = true
+            if courseID == nil, let linkedCanvasCourseID,
+               courses.contains(where: { $0.id == linkedCanvasCourseID }) {
+                courseID = linkedCanvasCourseID
+            }
         }
     }
 

@@ -285,7 +285,7 @@ final class BridgeServer {
     // The grant exposes academic metadata. Drive links, folder requests and
     // capture routing belong to the desktop's account and storage configuration.
     private static func classMetadata(_ enrollment: ClassEnrollment) throws -> JSONValue {
-        let academicFields: Set<String> = ["id", "termID", "courseID", "courseCode", "title", "section",
+        let academicFields: Set<String> = ["id", "termID", "courseID", "canvasCourseID", "courseCode", "title", "section",
                                            "instructor", "credits", "sessionDetails", "location", "archived"]
         let fields = try JSONValue.encoded(enrollment).object ?? [:]
         return .object(fields.filter { academicFields.contains($0.key) })

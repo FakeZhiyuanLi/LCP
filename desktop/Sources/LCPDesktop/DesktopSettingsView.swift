@@ -43,6 +43,33 @@ struct DesktopSettingsView: View {
                 }
             }.formStyle(.grouped).tabItem { Label("Terms", systemImage: "graduationcap") }.tag("terms")
             Form {
+                Section("Canvas coursework refresh") {
+                    Picker("Refresh interval", selection: Binding(get: { model.canvasSyncInterval }, set: model.setCanvasSyncInterval)) {
+                        ForEach(CanvasSyncInterval.allCases) { interval in
+                            Text(interval.label).tag(interval)
+                        }
+                    }
+                    LabeledContent("Status") { Text(model.canvasSyncStatus).multilineTextAlignment(.trailing) }
+                    if let lastRun = model.canvasSyncLastRun {
+                        LabeledContent("Last successful refresh", value: lastRun.formatted(date: .abbreviated, time: .shortened))
+                    } else {
+                        LabeledContent("Last successful refresh", value: "Not yet")
+                    }
+                    LabeledContent("Pending reviews", value: String(model.canvasSyncPendingReviews.count))
+                    HStack {
+                        Button("Refresh Canvas Now", systemImage: "arrow.clockwise") { model.syncCanvasNow() }
+                            .disabled(model.canvasSyncInProgress)
+                        Button("Review Next Item") { model.presentNextCanvasReview() }
+                            .disabled(model.canvasSyncPendingReviews.isEmpty)
+                    }
+                }
+                Section("How automatic refresh works") {
+                    Text("LCP matches each active class to a saved Canvas course, an exact course code, or an exact class title. It imports read-only snapshots of assignments, quizzes, announcements, and course calendar events into the class library.")
+                    Text("New or changed official deadlines are placed in the review queue. They never overwrite your progress, submission links, citations, or reviewed Coursework until you approve the saved Canvas source.")
+                    Text("Connect UCI Canvas in Connections, then use University Services inside a class to review or correct a course match. Archived classes are skipped.")
+                }
+            }.formStyle(.grouped).tabItem { Label("Canvas", systemImage: "arrow.triangle.2.circlepath") }.tag("canvas")
+            Form {
                 Section("Optional Lecture Feed") {
                     Text("Read-only, one-way snapshot delivery").font(.headline)
                     LabeledContent("Local Folder") { Text(model.rootURL.appendingPathComponent("Feed").path).font(.caption).textSelection(.enabled) }
@@ -63,6 +90,6 @@ struct DesktopSettingsView: View {
                 }
             }.formStyle(.grouped).tabItem { Label("Lectures", systemImage: "waveform") }.tag("lectures")
         }.disabled(model.libraryTransfer == .restore)
-            .frame(width: 700, height: 520)
+            .frame(width: 700, height: 600)
     }
 }

@@ -52,6 +52,7 @@ struct CourseworkReviewView: View {
         do {
             _ = try CourseworkService(repository: repository).accept(review)
             model.refresh()
+            model.refreshCanvasReviewQueue()
             dismiss()
         } catch { feedback = error.localizedDescription }
     }

@@ -44,7 +44,27 @@ public struct UciCanvasClient: Sendable {
             URLQueryItem(name: "enrollment_state", value: "active"),
         ]) { (course: Course) in
             guard let title = course.name, !title.isEmpty else { return nil }
-            return UniversityItem(id: String(course.id), title: title, detail: course.course_code ?? "")
+            return UniversityItem(id: String(course.id), title: title, detail: course.course_code ?? "",
+                                 metadata: ["courseCode": course.course_code ?? ""])
+        }
+    }
+
+    /// Read all active student courses with a bounded pagination walk.
+    public func allCourses(maximum: Int = 500) async throws -> [UniversityItem] {
+        guard (1...1_000).contains(maximum) else {
+            throw UniversityServiceError.message("The Canvas course limit is invalid.")
+        }
+        var result: [UniversityItem] = []
+        var cursor: String?
+        var seen: Set<String> = []
+        while true {
+            let page = try await courses(cursor: cursor)
+            result.append(contentsOf: page.items.prefix(maximum - result.count))
+            guard result.count < maximum, let next = page.next else { return result }
+            guard seen.insert(next).inserted else {
+                throw UniversityServiceError.message("Canvas returned too many or repeated course pages. Open University Services to retry manually.")
+            }
+            cursor = next
         }
     }
 
@@ -111,6 +131,27 @@ public struct UciCanvasClient: Sendable {
                     .compactMap { $0 }.joined(separator: " · ")
                 return UniversityItem(id: String(event.id), title: event.title, detail: detail.isEmpty ? "Calendar event" : detail)
             }
+        }
+    }
+
+    /// Read all visible items in one course and collection with a hard bound.
+    /// Automatic refresh uses this instead of exposing an unbounded pagination
+    /// loop to the scheduler.
+    public func allItems(courseID: String, kind: CanvasItemKind, maximum: Int = 500) async throws -> [UniversityItem] {
+        guard (1...1_000).contains(maximum) else {
+            throw UniversityServiceError.message("The Canvas item limit is invalid.")
+        }
+        var result: [UniversityItem] = []
+        var cursor: String?
+        var seen: Set<String> = []
+        while true {
+            let page = try await items(courseID: courseID, kind: kind, cursor: cursor)
+            result.append(contentsOf: page.items.prefix(maximum - result.count))
+            guard result.count < maximum, let next = page.next else { return result }
+            guard seen.insert(next).inserted else {
+                throw UniversityServiceError.message("Canvas returned too many or repeated \(kind.displayName.lowercased()) pages. Open University Services to retry manually.")
+            }
+            cursor = next
         }
     }
 

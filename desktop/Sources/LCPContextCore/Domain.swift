@@ -93,6 +93,9 @@ public struct ClassEnrollment: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var termID: UUID?
     public var courseID: UUID?
+    /// The student's stable UCI Canvas course identifier, when automatic
+    /// coursework refresh has linked this class to a Canvas course.
+    public var canvasCourseID: String?
     public var courseCode: String
     public var title: String
     public var section: String
@@ -114,11 +117,13 @@ public struct ClassEnrollment: Codable, Equatable, Identifiable, Sendable {
         return label.caseInsensitiveCompare(title) == .orderedSame ? title : "\(label) · \(title)"
     }
 
-    public init(id: UUID = UUID(), termID: UUID? = nil, courseID: UUID? = nil, courseCode: String = "", title: String,
+    public init(id: UUID = UUID(), termID: UUID? = nil, courseID: UUID? = nil, canvasCourseID: String? = nil,
+                courseCode: String = "", title: String,
                 section: String = "", instructor: String = "", credits: Double? = nil,
                 archived: Bool = false, recordingDestination: RecordingDestination? = nil,
                 sessionDetails: String? = nil, location: String? = nil) {
         self.id = id; self.termID = termID; self.courseID = courseID; self.courseCode = courseCode
+        self.canvasCourseID = canvasCourseID
         self.title = title; self.section = section; self.instructor = instructor; self.credits = credits
         self.sessionDetails = sessionDetails; self.location = location
         self.archived = archived; self.recordingDestination = recordingDestination

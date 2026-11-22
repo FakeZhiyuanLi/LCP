@@ -86,6 +86,9 @@ struct WorkspaceView: View {
             }
         }
         .sheet(item: $model.presentedCitation) { citation in CitationReaderView(model: model, citation: citation) }
+        .sheet(item: $model.presentedCanvasCourseworkReview) { review in
+            CourseworkReviewView(model: model, review: review)
+        }
         .alert("LCP Could Not Complete This Action", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK") { model.errorMessage = nil }
         } message: { Text(model.errorMessage ?? "") }

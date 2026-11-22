@@ -156,6 +156,17 @@ final class UciCanvasClientTests: XCTestCase {
         XCTAssertNil(last.next)
     }
 
+    func testBoundedPaginationHelpersCollectEveryPageAndStopAtTheLimit() async throws {
+        let allCourses = try await canvas.allCourses().map(\.id)
+        XCTAssertEqual(allCourses, ["40", "46"])
+        let boundedCourses = try await canvas.allCourses(maximum: 1).map(\.id)
+        XCTAssertEqual(boundedCourses, ["40"])
+        let allAssignments = try await canvas.allItems(courseID: "46", kind: .assignments).map(\.id)
+        XCTAssertEqual(allAssignments, ["11"])
+        let boundedAssignments = try await canvas.allItems(courseID: "46", kind: .assignments, maximum: 1).map(\.id)
+        XCTAssertEqual(boundedAssignments, ["11"])
+    }
+
     func testAssignmentAndPageProduceSearchableSources() async throws {
         let assignments = try await canvas.items(courseID: "46", kind: .assignments)
         let item = try XCTUnwrap(assignments.items.first)

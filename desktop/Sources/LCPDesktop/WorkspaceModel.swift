@@ -55,6 +55,14 @@ final class WorkspaceModel: ObservableObject {
     var driveFolderRetryAfter: [UUID: Date] = [:]
     @Published var capture: CaptureCoordinator?
     var captureInProgress: Bool { captureIsRecording || capture?.state == .requestingPermission }
+    @Published var canvasSyncInterval: CanvasSyncInterval = .hourly
+    @Published private(set) var canvasSyncStatus = "Canvas coursework refresh is waiting for setup."
+    @Published private(set) var canvasSyncLastRun: Date?
+    @Published private(set) var canvasSyncPendingReviews: [CourseworkImportReview] = []
+    @Published private(set) var canvasSyncInProgress = false
+    @Published var presentedCanvasCourseworkReview: CourseworkImportReview?
+    private var canvasSyncTask: Task<Void, Never>?
+    private var canvasSyncLastAttempt: Date?
     private var captureSubscriptions = Set<AnyCancellable>()
     @Published var rootURL: URL
     private let usesPersistentProfilePreference: Bool
@@ -90,6 +98,11 @@ final class WorkspaceModel: ObservableObject {
         return groups
     }
 
+    private static let canvasSyncIntervalKey = "LCPDesktop.canvasSyncInterval"
+    private static func canvasSyncLastRunKey(for root: URL) -> String {
+        "LCPDesktop.canvasSyncLastRun.\(root.standardizedFileURL.path)"
+    }
+
     init() {
         let arguments = ProcessInfo.processInfo.arguments
         usesPersistentProfilePreference = !arguments.contains("--profile-root") && !arguments.contains("--demo") && ProcessInfo.processInfo.environment["LCP_DESKTOP_ROOT"] == nil
@@ -105,13 +118,22 @@ final class WorkspaceModel: ObservableObject {
             rootURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("LCP Desktop", isDirectory: true)
         }
+        if let raw = UserDefaults.standard.object(forKey: Self.canvasSyncIntervalKey) as? Int,
+           let saved = CanvasSyncInterval(rawValue: raw) {
+            canvasSyncInterval = saved
+        }
+        canvasSyncLastRun = UserDefaults.standard.object(forKey: Self.canvasSyncLastRunKey(for: rootURL)) as? Date
         do {
             repository = try ContextRepository(rootURL: rootURL)
             refresh()
             if arguments.contains("--demo") && state.classes.isEmpty { try seedDemo() }
             else { restorePresentation() }
             isReady = true
+            canvasSyncStatus = canvasSyncInterval == .manual
+                ? "Canvas coursework refresh is manual."
+                : "Canvas coursework refresh is scheduled (\(canvasSyncInterval.label.lowercased()))."
             processPendingDriveFolders()
+            refreshCanvasReviewQueue()
             if allowsSyntheticDiagnostics, arguments.contains("--render-preview"), arguments.contains("--preview-overview") {
                 selection = .welcome
             }
@@ -136,6 +158,180 @@ final class WorkspaceModel: ObservableObject {
     func mutate(_ operation: (inout ContextState) throws -> Void) {
         guard let repository else { return }
         perform { try repository.update(operation) }
+    }
+
+    func setCanvasSyncInterval(_ interval: CanvasSyncInterval) {
+        canvasSyncInterval = interval
+        UserDefaults.standard.set(interval.rawValue, forKey: Self.canvasSyncIntervalKey)
+        canvasSyncLastAttempt = nil
+        if interval == .manual {
+            canvasSyncTask?.cancel()
+            canvasSyncTask = nil
+            canvasSyncStatus = "Canvas coursework refresh is manual."
+        } else {
+            canvasSyncStatus = "Canvas coursework refresh is scheduled (\(interval.label.lowercased()))."
+            maybeSyncCanvas()
+        }
+    }
+
+    func syncCanvasNow() {
+        startCanvasSync(force: true)
+    }
+
+    func maybeSyncCanvas() {
+        guard canvasSyncInterval != .manual,
+              let lastAttempt = canvasSyncLastAttempt else {
+            if canvasSyncInterval != .manual { startCanvasSync(force: false) }
+            return
+        }
+        guard Date.now.timeIntervalSince(lastAttempt) >= canvasSyncInterval.seconds else { return }
+        startCanvasSync(force: false)
+    }
+
+    func linkCanvasCourse(classID: UUID, courseID: String) {
+        guard Int64(courseID).map({ $0 > 0 }) == true, let repository else { return }
+        do {
+            try repository.update { state in
+                guard let index = state.classes.firstIndex(where: { $0.id == classID }) else {
+                    throw DesktopUIError.message("This class is no longer in the library.")
+                }
+                state.classes[index].canvasCourseID = courseID
+            }
+            refresh()
+            notice = "Canvas course linked. Automatic refresh will include its visible coursework and updates."
+            syncCanvasNow()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func refreshCanvasReviewQueue() {
+        guard let repository else {
+            canvasSyncPendingReviews = []
+            return
+        }
+        var reviews: [CourseworkImportReview] = []
+        for material in state.materials where material.kind == "uci-canvas" {
+            do {
+                let review = try CourseworkService(repository: repository).reviewCanvasMaterial(material.id)
+                if review.previous == nil || review.proposed != review.previous {
+                    reviews.append(review)
+                }
+            } catch { continue }
+        }
+        canvasSyncPendingReviews = reviews.sorted { $0.proposed.title.localizedStandardCompare($1.proposed.title) == .orderedAscending }
+    }
+
+    func presentNextCanvasReview() {
+        refreshCanvasReviewQueue()
+        presentedCanvasCourseworkReview = canvasSyncPendingReviews.first
+    }
+
+    private func startCanvasSync(force: Bool) {
+        guard isReady, repository != nil, !restorePending, !canvasSyncInProgress else { return }
+        if !force, canvasSyncInterval == .manual { return }
+        let credentials = UniversityCredentials.forLibrary(rootURL)
+        guard (try? credentials.hasCanvasToken()) == true else {
+            canvasSyncStatus = "Connect UCI Canvas to enable automatic coursework refresh."
+            canvasSyncLastAttempt = Date.now
+            return
+        }
+        let token: String
+        do { token = try credentials.canvasToken() }
+        catch {
+            canvasSyncStatus = "Connect UCI Canvas to enable automatic coursework refresh."
+            canvasSyncLastAttempt = Date.now
+            return
+        }
+        let classes = state.classes.filter { !$0.archived }
+        guard !classes.isEmpty else {
+            canvasSyncStatus = "Add a class to match it with Canvas coursework."
+            canvasSyncLastAttempt = Date.now
+            return
+        }
+        canvasSyncLastAttempt = Date.now
+        canvasSyncInProgress = true
+        canvasSyncStatus = "Refreshing Canvas coursework…"
+        let client = UciCanvasClient(token: token)
+        canvasSyncTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.canvasSyncInProgress = false
+                self.canvasSyncTask = nil
+            }
+            do {
+                let courses = try await client.allCourses()
+                try Task.checkCancellation()
+                let matching = CanvasCourseworkSyncService.match(classes: classes, courses: courses)
+                self.saveCanvasMatches(matching.matches)
+                let batch = try await CanvasCourseworkSyncService().fetch(client: client, matches: matching.matches)
+                try Task.checkCancellation()
+                guard !self.restorePending else {
+                    self.canvasSyncStatus = "Canvas refresh paused while the library is being restored."
+                    return
+                }
+                guard let repository = self.repository else { return }
+                var newMaterials = 0
+                var revisedMaterials = 0
+                var unchangedMaterials = 0
+                var failures = batch.skipped
+                for source in batch.sources {
+                    try Task.checkCancellation()
+                    guard !self.restorePending else {
+                        self.canvasSyncStatus = "Canvas refresh paused while the library is being restored."
+                        return
+                    }
+                    guard let remoteID = source.document.remoteID, !remoteID.isEmpty else {
+                        failures.append("\(source.item.title): Canvas did not provide a stable source identity")
+                        continue
+                    }
+                    let beforeMaterials = repository.state.materials.count
+                    let beforeRevisions = repository.state.materialRevisions.count
+                    do {
+                        _ = try MaterialService(repository: repository).importUniversityDocument(
+                            source.document, classID: source.match.classID, provider: "uci-canvas",
+                            remoteID: remoteID, title: source.item.title)
+                        let materialDelta = repository.state.materials.count - beforeMaterials
+                        let revisionDelta = repository.state.materialRevisions.count - beforeRevisions
+                        if materialDelta > 0 { newMaterials += materialDelta }
+                        else if revisionDelta > 0 { revisedMaterials += revisionDelta }
+                        else { unchangedMaterials += 1 }
+                    } catch {
+                        failures.append("\(source.item.title): \(error.localizedDescription)")
+                    }
+                }
+                self.refresh()
+                self.refreshCanvasReviewQueue()
+                let completedAt = Date.now
+                self.canvasSyncLastRun = completedAt
+                UserDefaults.standard.set(completedAt, forKey: Self.canvasSyncLastRunKey(for: self.rootURL))
+                let pending = self.canvasSyncPendingReviews.count
+                var message = "Canvas refreshed \(batch.sources.count) source(s). \(newMaterials) new, \(revisedMaterials) updated, \(unchangedMaterials) unchanged."
+                if pending > 0 { message += " \(pending) coursework item(s) await review." }
+                if !matching.unmatched.isEmpty { message += " \(matching.unmatched.count) class(es) need a Canvas course match." }
+                if !failures.isEmpty { message += " \(failures.count) item(s) were skipped." }
+                self.canvasSyncStatus = message
+            } catch is CancellationError {
+                self.canvasSyncStatus = "Canvas refresh cancelled."
+            } catch {
+                self.canvasSyncStatus = "Canvas refresh failed. \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func saveCanvasMatches(_ matches: [CanvasCourseMatch]) {
+        guard let repository else { return }
+        let changed = matches.filter { match in
+            state.classes.first(where: { $0.id == match.classID })?.canvasCourseID != match.canvasCourseID
+        }
+        guard !changed.isEmpty else { return }
+        do {
+            try repository.update { state in
+                for match in changed {
+                    guard let index = state.classes.firstIndex(where: { $0.id == match.classID }) else { continue }
+                    state.classes[index].canvasCourseID = match.canvasCourseID
+                }
+            }
+            refresh()
+        } catch { canvasSyncStatus = "Canvas course matching failed. \(error.localizedDescription)" }
     }
     /// Global commands share the workspace's presenter. Reserve the next turn
     /// and recheck after bringing it forward; AppKit panels run nested event loops.
@@ -347,7 +543,13 @@ final class WorkspaceModel: ObservableObject {
 
     private func startTransfer(_ transfer: LibraryTransfer, operation: @escaping @MainActor () async throws -> Void) {
         guard libraryTransfer == nil else { return }
-        if transfer == .restore { resetDriveFolderWork() }
+        if transfer == .restore {
+            canvasSyncTask?.cancel()
+            canvasSyncTask = nil
+            canvasSyncInProgress = false
+            canvasSyncStatus = "Canvas refresh paused while the library is being restored."
+            resetDriveFolderWork()
+        }
         libraryTransfer = transfer
         transferTask = Task { @MainActor [self] in
             defer {
@@ -462,6 +664,7 @@ final class WorkspaceModel: ObservableObject {
         guard !restorePending else { return }
         refresh()
         processPendingDriveFolders()
+        maybeSyncCanvas()
         guard let repository else { return }
         let feed = rootURL.appendingPathComponent("Feed", isDirectory: true)
         let index = feed.appendingPathComponent("index.json")

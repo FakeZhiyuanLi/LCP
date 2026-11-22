@@ -108,6 +108,12 @@ new revision. Saved citations can still open the earlier copy offline.
   discussions and calendar data your account can read. A
   deployment for other students needs a developer key approved by the Canvas
   administrator. [Canvas token documentation](https://canvas.eee.uci.edu/doc/api/file.oauth.html)
+- **Automatic Canvas refresh.** Open **Settings → Canvas**, choose a refresh
+  interval, and connect UCI Canvas. LCP matches active classes by a saved Canvas
+  course, an exact normalized course code (including UCI's `I&C SCI` spelling),
+  or an exact class title. It refreshes bounded snapshots of assignments,
+  quizzes, announcements, and course calendar events. Open **University
+  Services** inside a class to correct or explicitly link a course match.
 - **Google Drive, Gmail and Calendar.** This preview uses your own Google Cloud
   project with the Drive API, Gmail API and Calendar API enabled. Configure the Google Auth
   Platform audience to allow your account, adding yourself as a test user if
@@ -161,9 +167,10 @@ timezone. An absent deadline stays unknown. A new source import never silently
 changes a saved deadline: reimport, inspect the review, then accept it. Progress,
 related materials and a chosen Gradescope submission link survive that update.
 If the source, coursework or term changed while the review was open, reopen it
-before saving. This is a review of the saved source; it is not a background sync
-or proof that Canvas has not changed since the last import. Earlier imported
-Canvas materials need one reimport to add the structured coursework facts.
+before saving. Automatic Canvas refresh imports newer source snapshots and
+places new or changed official facts in the same review queue. It never
+overwrites Coursework progress, submission links, related materials or reviewed
+deadlines without an explicit acceptance.
 
 In **Coursework → Edit → Related class materials**, select the saved Drive
 reading, Gmail clarification or attachment, Gradescope feedback PDF, UCI schedule,

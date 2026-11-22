@@ -430,13 +430,42 @@ struct CourseworkListView: View {
     @State private var sourceReview: CourseworkImportReview?
     var entries: [CourseworkItem] { model.state.coursework.filter { $0.classID == classID }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending } }
     var body: some View {
+        let pendingReviews = model.canvasSyncPendingReviews.filter { $0.proposed.classID == classID }
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Assignments, readings, and exams as class context").foregroundStyle(.secondary)
                 Spacer()
+                Button("Refresh Canvas", systemImage: "arrow.clockwise") { model.syncCanvasNow() }
+                    .disabled(model.canvasSyncInProgress)
                 Button("University Services…") { model.presentedEditor = .universityServices(classID: classID) }
                 Button("Add Coursework…") { model.presentedEditor = .newCoursework }
             }.padding(.top, 12)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: model.canvasSyncInProgress ? "arrow.triangle.2.circlepath" : "graduationcap")
+                        .foregroundStyle(WorkspacePalette.accent)
+                    Text("Canvas coursework refresh").font(.headline)
+                    Spacer()
+                    if model.canvasSyncInProgress { ProgressView().controlSize(.small) }
+                }
+                Text(model.canvasSyncStatus).font(.callout).foregroundStyle(.secondary)
+                if let lastRun = model.canvasSyncLastRun {
+                    Text("Last successful refresh \(lastRun.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption).foregroundStyle(.tertiary)
+                }
+                if !pendingReviews.isEmpty {
+                    HStack {
+                        Text("\(pendingReviews.count) Canvas item(s) are ready for review.")
+                            .font(.callout)
+                        Spacer()
+                        Button("Review next") {
+                            model.presentedCanvasCourseworkReview = pendingReviews.first
+                        }
+                    }
+                }
+            }
+            .padding(12)
+            .background(WorkspacePalette.tintSurface, in: RoundedRectangle(cornerRadius: 12))
             if entries.isEmpty { ContentUnavailableView("Keep Coursework in Context", systemImage: "checklist", description: Text("Save official dates, submission links, and progress. Date-only deadlines stay date-only.")) }
             else {
                 List(entries) { entry in

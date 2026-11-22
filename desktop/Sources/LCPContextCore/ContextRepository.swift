@@ -659,6 +659,7 @@ public final class ContextRepository {
         }
         for item in state.classes {
             guard item.termID.map(termIDs.contains) ?? true, item.courseID.map(courseIDs.contains) ?? true,
+                  item.canvasCourseID.map({ Int64($0).map { $0 > 0 && String($0) == $0.description } ?? false }) ?? true,
                   !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, item.credits.map({ $0.isFinite && $0 >= 0 }) ?? true,
                   item.sessionDetails.map({ $0.utf8.count <= 16_384 }) ?? true,
                   item.location.map({ $0.utf8.count <= 4_096 }) ?? true else {
