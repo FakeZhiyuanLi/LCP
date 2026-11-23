@@ -152,6 +152,70 @@ data: [DONE]
         XCTAssertTrue(collector.values.last?.finished == true)
         XCTAssertEqual(collector.values.last?.usage, result.usage)
     }
+
+    func testNamedResponsesEventsFromGatewayDeliverOnlyAnswerText() async throws {
+        let wire = [
+            ": keep-alive", "",
+            "event: response.created", "id: 1", "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fixture\"}}", "",
+            "event: response.reasoning_summary_text.delta", "data: {\"delta\":\"summary\"}", "",
+            "event: response.output_text.delta", "retry: 1000", "data: {\"delta\":", "data: \"OK\"}", "",
+            "event: response.completed", "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"total_tokens\":14}}}", ""
+        ].joined(separator: "\r\n")
+        AgentProviderFixtureProtocol.streamBody = Data(wire.utf8)
+        let collector = StreamUpdateCollector()
+        let reply = try await client().generateStream(prompt: "Fictional message") { collector.append($0) }
+        XCTAssertEqual(reply.text, "OK")
+        XCTAssertEqual(reply.requestID, "resp_fixture")
+        XCTAssertEqual(reply.usage?.totalTokens, 14)
+        XCTAssertEqual(collector.values.map(\.delta).joined(), "OK")
+    }
+
+    func testStreamFramingSurvivesOneByteChunksAndPrettyJSONFallback() throws {
+        let fixtures = [
+            "\u{FEFF}: keep-alive\r\runknown-field: ignore\rid: 7\revent: response.output_text.delta\rdata: {\"delta\":\"café\"}\r\rdata: [DONE]",
+            "\u{FEFF}  {\n  \"id\":\"resp_fixture\",\n  \"output_text\":\"café\"\n}\n",
+            "data: {\"id\":\"resp_fixture\",\"output_text\":\"café\"}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"café\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n"
+        ]
+        for wire in fixtures {
+            let collector = StreamUpdateCollector()
+            var parser = ProviderStreamParser(onUpdate: { collector.append($0) })
+            for byte in wire.utf8 { try parser.consume(Data([byte])) }
+            XCTAssertEqual(try parser.finish().text, "café")
+            XCTAssertEqual(collector.values.filter(\.finished).count, 1)
+        }
+    }
+
+    func testBrokenOrUnfinishedStreamsGiveSpecificSafeErrorsWithoutFinishing() async throws {
+        let privateValue = "fictional-private-marker"
+        let fixtures: [(String, AgentResponseIssue)] = [
+            ("event: \(privateValue)\ndata: \(privateValue)\n\n", .malformedEvent),
+            ("{\"output_text\": ", .malformedJSON),
+            ("<html>\(privateValue)</html>", .unexpectedFormat),
+            ("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n", .incomplete),
+            ("event: response.incomplete\ndata: {\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n", .tokenLimit),
+            ("data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"\(privateValue)\"}}}\n\n", .providerFailure),
+            ("data: {\"type\":\"response.completed\",\"response\":{}}\n\n", .noText)
+        ]
+        for (wire, issue) in fixtures {
+            let collector = StreamUpdateCollector()
+            let diagnostics = AgentRequestDiagnostics()
+            AgentProviderFixtureProtocol.streamBody = Data(wire.utf8)
+            do {
+                _ = try await client().generateStream(prompt: privateValue, diagnostics: diagnostics) { collector.append($0) }
+                XCTFail("Expected \(issue)")
+            } catch let error as AgentProviderError {
+                XCTAssertEqual(error, .response(issue))
+                let report = diagnostics.supportDetails(stage: .generation, error: error)
+                XCTAssertTrue(report.contains(diagnostics.id.uuidString))
+                XCTAssertTrue(report.contains(issue.rawValue))
+                XCTAssertFalse(report.contains(privateValue))
+                XCTAssertFalse(error.localizedDescription.contains(privateValue))
+            }
+            XCTAssertFalse(collector.values.contains(where: \.finished))
+        }
+    }
+
 }
 
 private final class StreamUpdateCollector: @unchecked Sendable {

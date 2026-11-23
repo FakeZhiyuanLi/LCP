@@ -156,6 +156,17 @@ request. The conversations are local library data, and LCP does not let a chat
 turn change classes, coursework, Canvas, Drive, Gmail, Gradescope, deadlines,
 grades, or recordings.
 
+If a chat request fails, choose **Copy Error Details** beside the message. The
+diagnostic ID identifies that attempt in the Mac’s unified log. LCP records the
+request stage, HTTP status, response format, event counts, elapsed time and
+failure reason. Keys, prompt text, class materials and replies stay out of these
+log entries. To look up an attempt in Mac Terminal, replace `PASTE-ID-HERE`
+with the copied diagnostic ID.
+
+```sh
+/usr/bin/log show --last 1h --info --predicate 'subsystem == "org.lcp.Desktop" AND category == "Agent" AND eventMessage CONTAINS "PASTE-ID-HERE"'
+```
+
 - **UCI Canvas.** Open **Account → Settings → Approved Integrations** in
   UCI Canvas. If the university enables personal access tokens for your account,
   create one for your own LCP installation, then enter it under **Connections → UCI Canvas → Set Up**.

@@ -116,19 +116,57 @@ public struct AgentProviderStreamUpdate: Sendable {
     }
 }
 
+public enum AgentResponseIssue: String, Sendable {
+    case malformedEvent, malformedJSON, unexpectedFormat, invalidEncoding, invalidText
+    case noText, incomplete, tokenLimit, providerFailure, outputTooLarge
+
+    var message: String {
+        switch self {
+        case .malformedEvent: return "LCP could not decode an event in the provider’s reply."
+        case .malformedJSON: return "The provider returned an unreadable JSON response."
+        case .unexpectedFormat: return "The provider returned an unrecognized response format."
+        case .invalidEncoding, .invalidText: return "The provider returned text that LCP could not display."
+        case .noText: return "The provider finished without returning an answer."
+        case .incomplete: return "The response ended before the provider finished the answer. You can retry your message."
+        case .tokenLimit: return "The provider reached its output limit before finishing. Try asking for a shorter answer."
+        case .providerFailure: return "The provider reported that it could not finish this request."
+        case .outputTooLarge: return "The provider’s reply exceeded LCP’s size limit."
+        }
+    }
+}
+
 public enum AgentProviderError: LocalizedError, Equatable, Sendable {
     case invalidConfiguration
     case invalidCredential
+    case credentialAccess(Int32)
     case inputTooLarge
     case unsupportedProvider
     case invalidResponse
+    case response(AgentResponseIssue)
+    case network(Int)
     case requestFailed
     case http(Int)
+
+    var diagnosticCode: String {
+        switch self {
+        case .invalidConfiguration: return "invalidConfiguration"
+        case .invalidCredential: return "invalidCredential"
+        case .credentialAccess(let code): return "keychain_\(code)"
+        case .inputTooLarge: return "inputTooLarge"
+        case .unsupportedProvider: return "unsupportedProvider"
+        case .invalidResponse: return "invalidResponse"
+        case .response(let issue): return issue.rawValue
+        case .requestFailed: return "requestFailed"
+        case .network(let code): return "network_\(code)"
+        case .http(let code): return "http_\(code)"
+        }
+    }
 
     public var errorDescription: String? {
         switch self {
         case .invalidConfiguration:
             return "Enter an HTTPS provider URL, a name, and a model."
+        case .credentialAccess: return "LCP could not read or update the provider connection in the Mac Keychain."
         case .invalidCredential:
             return "Enter an API key without spaces or line breaks."
         case .inputTooLarge:
@@ -137,7 +175,8 @@ public enum AgentProviderError: LocalizedError, Equatable, Sendable {
             return "This provider connection is not supported yet. Choose OpenAI-compatible Responses API."
         case .invalidResponse:
             return "The provider returned an unexpected response. Check the endpoint and model."
-        case .requestFailed:
+        case .response(let issue): return issue.message
+        case .requestFailed, .network:
             return "LCP could not reach the provider. Check the network and endpoint."
         case .http(401):
             return "The provider rejected the API key. Check the key and reconnect."
@@ -166,103 +205,82 @@ public struct OpenAICompatibleAgentClient: Sendable {
         self.http = http
     }
 
-    public func checkConnection() async throws -> AgentProviderCheckResult {
+    private func destination() throws -> (endpoint: URL, host: String) {
         guard profile.providerKind == "openai-compatible" else { throw AgentProviderError.unsupportedProvider }
         let base = try AgentProviderProfile.validateBaseURL(profile.baseURL)
         guard let host = base.host?.lowercased() else { throw AgentProviderError.invalidConfiguration }
-        let endpoint = base.appendingPathComponent("responses")
-        let body = try Self.requestBody(model: profile.model)
-        do {
-            let data = try await http.postJSON(endpoint, body: body, bearer: apiKey, host: host)
+        return (base.appendingPathComponent("responses"), host)
+    }
+
+    public func checkConnection() async throws -> AgentProviderCheckResult {
+        let diagnostics = AgentRequestDiagnostics()
+        return try await diagnostics.run(.connectionCheck) {
+            let (endpoint, host) = try destination()
+            let body = try Self.requestBody(model: profile.model)
+            let (data, response) = try await http.postJSONResponse(endpoint, body: body, bearer: apiKey, host: host)
+            diagnostics.received(response)
             guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw AgentProviderError.response(.malformedJSON)
+            }
+            // This tiny probe may legitimately exhaust its eight-token budget.
+            do { try Self.checkStatus(object) } catch AgentProviderError.response(.tokenLimit) { }
+            guard object["id"] is String || Self.responseText(from: object) != nil else {
                 throw AgentProviderError.invalidResponse
             }
-            let requestID = object["id"] as? String
-            return AgentProviderCheckResult(model: profile.model, endpoint: endpoint, requestID: requestID)
-        } catch let error as AgentProviderError {
-            throw error
-        } catch let error as UniversityServiceError {
-            switch error {
-            case .http(let status): throw AgentProviderError.http(status)
-            case .message: throw AgentProviderError.requestFailed
-            }
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw AgentProviderError.requestFailed
+            return AgentProviderCheckResult(model: profile.model, endpoint: endpoint, requestID: object["id"] as? String)
         }
     }
 
-    /// Generate a bounded answer from an explicit, user-visible class context.
-    /// The context is sent as quoted study data so source text cannot alter the
-    /// provider request's permissions or LCP records.
     public func generate(prompt: String, maxOutputTokens: Int = 1_200) async throws -> AgentProviderGenerationResult {
-        guard profile.providerKind == "openai-compatible" else { throw AgentProviderError.unsupportedProvider }
-        guard (1...4_096).contains(maxOutputTokens), prompt.utf8.count <= 3_000_000 else {
-            throw AgentProviderError.inputTooLarge
-        }
-        let base = try AgentProviderProfile.validateBaseURL(profile.baseURL)
-        guard let host = base.host?.lowercased() else { throw AgentProviderError.invalidConfiguration }
-        let endpoint = base.appendingPathComponent("responses")
-        let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maxOutputTokens)
-        do {
-            let data = try await http.postJSON(endpoint, body: body, bearer: apiKey, host: host)
-            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let text = Self.responseText(from: object), !text.isEmpty else {
-                throw AgentProviderError.invalidResponse
+        let diagnostics = AgentRequestDiagnostics()
+        return try await diagnostics.run(.generate) {
+            let (endpoint, host) = try destination()
+            let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maxOutputTokens)
+            let (data, response) = try await http.postJSONResponse(endpoint, body: body, bearer: apiKey, host: host)
+            diagnostics.received(response)
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw AgentProviderError.response(.malformedJSON)
+            }
+            try Self.checkStatus(object)
+            guard let text = Self.responseText(from: object), !text.isEmpty else {
+                throw AgentProviderError.response(.noText)
             }
             return AgentProviderGenerationResult(text: text, requestID: object["id"] as? String,
                                                  usage: Self.usage(from: object["usage"] as? [String: Any]))
-        } catch let error as AgentProviderError {
-            throw error
-        } catch let error as UniversityServiceError {
-            switch error {
-            case .http(let status): throw AgentProviderError.http(status)
-            case .message: throw AgentProviderError.requestFailed
-            }
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw AgentProviderError.requestFailed
         }
     }
 
-    /// Generate a bounded answer while forwarding text deltas as they arrive.
-    /// The callback receives only provider output and sanitized usage metadata.
     public func generateStream(prompt: String, maxOutputTokens: Int = 1_200,
+                               diagnostics: AgentRequestDiagnostics = .init(),
                                onUpdate: @escaping @Sendable (AgentProviderStreamUpdate) -> Void) async throws -> AgentProviderGenerationResult {
-        guard profile.providerKind == "openai-compatible" else { throw AgentProviderError.unsupportedProvider }
-        guard (1...4_096).contains(maxOutputTokens), prompt.utf8.count <= 3_000_000 else {
-            throw AgentProviderError.inputTooLarge
-        }
-        let base = try AgentProviderProfile.validateBaseURL(profile.baseURL)
-        guard let host = base.host?.lowercased() else { throw AgentProviderError.invalidConfiguration }
-        let endpoint = base.appendingPathComponent("responses")
-        let body = try Self.generationBody(model: profile.model, prompt: prompt,
-                                           maxOutputTokens: maxOutputTokens, stream: true)
-        do {
+        try await diagnostics.run(.stream) {
+            let (endpoint, host) = try destination()
+            let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maxOutputTokens, stream: true)
             let chunks = try http.postJSONStream(endpoint, body: body, bearer: apiKey, host: host,
-                                                 limit: 3_500_000)
-            var parser = StreamParser(onUpdate: onUpdate)
+                                                 limit: ProviderStreamParser.byteLimit, onResponse: { diagnostics.received($0) })
+            var parser = ProviderStreamParser(onUpdate: onUpdate)
+            defer { diagnostics.streamSummary(parser) }
             for try await chunk in chunks {
                 try Task.checkCancellation()
                 try parser.consume(chunk)
             }
-            let result = try parser.finish()
-            guard !result.text.isEmpty else { throw AgentProviderError.invalidResponse }
-            return result
-        } catch let error as AgentProviderError {
-            throw error
-        } catch let error as UniversityServiceError {
-            switch error {
-            case .http(let status): throw AgentProviderError.http(status)
-            case .message: throw AgentProviderError.requestFailed
-            }
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw AgentProviderError.requestFailed
+            try Task.checkCancellation()
+            return try parser.finish()
         }
+    }
+
+    static func checkStatus(_ object: [String: Any]) throws {
+        if object["status"] as? String == "failed" || object["error"] is [String: Any] {
+            throw AgentProviderError.response(.providerFailure)
+        }
+        if object["status"] as? String == "incomplete" {
+            throw incompleteResponse(object)
+        }
+    }
+
+    static func incompleteResponse(_ object: [String: Any]) -> AgentProviderError {
+        let reason = (object["incomplete_details"] as? [String: Any])?["reason"] as? String
+        return .response(reason == "max_output_tokens" ? .tokenLimit : .incomplete)
     }
 
     static func requestBody(model: String) throws -> Data {
@@ -281,6 +299,9 @@ public struct OpenAICompatibleAgentClient: Sendable {
     }
 
     private static func generationBody(model: String, prompt: String, maxOutputTokens: Int, stream: Bool) throws -> Data {
+        guard (1...4_096).contains(maxOutputTokens), prompt.utf8.count <= 3_000_000 else {
+            throw AgentProviderError.inputTooLarge
+        }
         let payload: [String: Any] = [
             "model": model,
             "input": prompt,
@@ -294,23 +315,26 @@ public struct OpenAICompatibleAgentClient: Sendable {
         return data
     }
 
-    private static func responseText(from object: [String: Any]) -> String? {
-        if let direct = object["output_text"] as? String {
-            return direct.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
+    static func responseText(from object: [String: Any]) -> String? {
+        if let direct = (object["output_text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !direct.isEmpty { return direct }
         guard let output = object["output"] as? [[String: Any]] else { return nil }
         var fragments: [String] = []
         for item in output {
             guard let content = item["content"] as? [[String: Any]] else { continue }
-            for part in content where (part["type"] as? String) == "output_text" {
-                if let text = part["text"] as? String { fragments.append(text) }
+            for part in content {
+                switch part["type"] as? String {
+                case "output_text": if let text = part["text"] as? String { fragments.append(text) }
+                case "refusal": if let text = part["refusal"] as? String { fragments.append(text) }
+                default: break
+                }
             }
         }
         let result = fragments.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return result.isEmpty ? nil : result
     }
 
-    private static func usage(from object: [String: Any]?) -> TokenUsage? {
+    static func usage(from object: [String: Any]?) -> TokenUsage? {
         guard let object else { return nil }
         func count(_ key: String) -> Int? {
             guard let value = object[key] as? NSNumber else { return nil }
@@ -321,92 +345,5 @@ public struct OpenAICompatibleAgentClient: Sendable {
                                        outputTokens: count("output_tokens"),
                                        totalTokens: count("total_tokens"))
         return usage.inputTokens == nil && usage.outputTokens == nil && usage.totalTokens == nil ? nil : usage
-    }
-
-    private struct StreamParser {
-        private var bytes = Data()
-        private var eventData: [String] = []
-        private var text = ""
-        private var requestID: String?
-        private var usage: TokenUsage?
-        private let onUpdate: @Sendable (AgentProviderStreamUpdate) -> Void
-
-        init(onUpdate: @escaping @Sendable (AgentProviderStreamUpdate) -> Void) {
-            self.onUpdate = onUpdate
-        }
-
-        mutating func consume(_ chunk: Data) throws {
-            guard bytes.count + chunk.count <= 3_500_000 else { throw AgentProviderError.inputTooLarge }
-            bytes.append(chunk)
-            while let newline = bytes.firstIndex(of: 0x0A) {
-                let line = bytes[..<newline]
-                bytes.removeSubrange(...newline)
-                try consumeLine(String(decoding: line, as: UTF8.self).trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
-            }
-        }
-
-        mutating func finish() throws -> AgentProviderGenerationResult {
-            if !bytes.isEmpty {
-                try consumeLine(String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
-                bytes.removeAll(keepingCapacity: false)
-            }
-            try finishEvent()
-            guard !text.isEmpty else { throw AgentProviderError.invalidResponse }
-            onUpdate(AgentProviderStreamUpdate(delta: "", text: text, requestID: requestID,
-                                                usage: usage, finished: true))
-            return AgentProviderGenerationResult(text: text, requestID: requestID, usage: usage)
-        }
-
-        private mutating func consumeLine(_ line: String) throws {
-            if line.isEmpty {
-                try finishEvent()
-            } else if line.hasPrefix("data:") {
-                eventData.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
-            } else if !line.hasPrefix(":") && eventData.isEmpty {
-                // A few compatible gateways ignore stream=true and return one JSON object.
-                eventData.append(line)
-            }
-        }
-
-        private mutating func finishEvent() throws {
-            guard !eventData.isEmpty else { return }
-            let raw = eventData.joined(separator: "\n")
-            eventData.removeAll(keepingCapacity: true)
-            guard raw != "[DONE]" else { return }
-            guard let data = raw.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw AgentProviderError.invalidResponse
-            }
-            if let id = object["id"] as? String { requestID = id }
-            if let error = object["error"] as? [String: Any], error["message"] != nil {
-                throw AgentProviderError.requestFailed
-            }
-            let eventType = object["type"] as? String
-            let response = object["response"] as? [String: Any]
-            if let responseID = response?["id"] as? String { requestID = responseID }
-            if let responseUsage = OpenAICompatibleAgentClient.usage(from: response?["usage"] as? [String: Any]) {
-                usage = responseUsage
-            } else if let eventUsage = OpenAICompatibleAgentClient.usage(from: object["usage"] as? [String: Any]) {
-                usage = eventUsage
-            }
-            if eventType == "response.failed" { throw AgentProviderError.requestFailed }
-            if let delta = object["delta"] as? String {
-                try append(delta)
-            } else if let choice = (object["choices"] as? [[String: Any]])?.first,
-                      let delta = choice["delta"] as? [String: Any], let content = delta["content"] as? String {
-                try append(content)
-            } else if let finalText = OpenAICompatibleAgentClient.responseText(from: response ?? object), text.isEmpty, !finalText.isEmpty {
-                try append(finalText)
-            }
-        }
-
-        private mutating func append(_ delta: String) throws {
-            guard delta.utf8.count <= 3_500_000 - text.utf8.count else { throw AgentProviderError.inputTooLarge }
-            guard delta.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil else {
-                throw AgentProviderError.invalidResponse
-            }
-            text.append(delta)
-            onUpdate(AgentProviderStreamUpdate(delta: delta, text: text, requestID: requestID, usage: usage))
-        }
     }
 }

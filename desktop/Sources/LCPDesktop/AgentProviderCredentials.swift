@@ -4,14 +4,11 @@ import LCPContextServices
 import Security
 
 enum AgentProviderCredentialError: LocalizedError {
-    case keychain
     case configurationFile
     case missingConfiguration
 
     var errorDescription: String? {
         switch self {
-        case .keychain:
-            return "LCP could not access the provider connection in the Mac Keychain."
         case .configurationFile:
             return "LCP could not read the Codex provider configuration."
         case .missingConfiguration:
@@ -65,7 +62,8 @@ final class AgentProviderCredentials {
         var value: CFTypeRef?
         let status = SecItemCopyMatching(request as CFDictionary, &value)
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = value as? Data else { throw AgentProviderCredentialError.keychain }
+        guard status == errSecSuccess else { throw AgentProviderError.credentialAccess(status) }
+        guard let data = value as? Data else { throw AgentProviderError.credentialAccess(errSecDecode) }
         return data
     }
 
@@ -78,12 +76,13 @@ final class AgentProviderCredentials {
         let update = [kSecValueData as String: data]
         let status = SecItemUpdate(request as CFDictionary, update as CFDictionary)
         if status == errSecSuccess { return }
-        guard status == errSecItemNotFound else { throw AgentProviderCredentialError.keychain }
+        guard status == errSecItemNotFound else { throw AgentProviderError.credentialAccess(status) }
         var item = request
         item[kSecValueData as String] = data
         item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         item[kSecAttrLabel as String] = "LCP Desktop · Agent provider connection"
-        guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw AgentProviderCredentialError.keychain }
+        let addStatus = SecItemAdd(item as CFDictionary, nil)
+        guard addStatus == errSecSuccess else { throw AgentProviderError.credentialAccess(addStatus) }
     }
 
     private func remove(_ account: String) throws {
@@ -92,7 +91,7 @@ final class AgentProviderCredentials {
 
     private nonisolated static func remove(service: String, account: String) throws {
         let status = SecItemDelete(query(service: service, account: account) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw AgentProviderCredentialError.keychain }
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw AgentProviderError.credentialAccess(status) }
     }
 
     func profilesList() throws -> [AgentProviderProfile] {
@@ -137,20 +136,9 @@ final class AgentProviderCredentials {
     }
 
     nonisolated private static func loadProfiles(service: String) throws -> [AgentProviderProfile] {
-        let request: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "profiles",
-            kSecAttrSynchronizable as String: false,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var value: CFTypeRef?
-        let status = SecItemCopyMatching(request as CFDictionary, &value)
-        if status == errSecItemNotFound { return [] }
-        guard status == errSecSuccess, let bytes = value as? Data,
-              let values = try? JSONDecoder().decode([AgentProviderProfile].self, from: bytes) else {
-            throw AgentProviderCredentialError.keychain
+        guard let bytes = try read(service: service, account: "profiles") else { return [] }
+        guard let values = try? JSONDecoder().decode([AgentProviderProfile].self, from: bytes) else {
+            throw AgentProviderError.credentialAccess(errSecDecode)
         }
         return values.sorted { $0.updatedAt > $1.updatedAt }
     }

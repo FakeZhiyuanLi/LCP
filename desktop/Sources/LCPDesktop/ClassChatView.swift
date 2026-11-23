@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import LCPContextCore
 import LCPContextServices
 
@@ -17,6 +18,7 @@ struct ClassChatView: View {
     @State private var loadingContext = false
     @State private var sending = false
     @State private var status: String?
+    @State private var errorDetails: String?
     @State private var generationPhase: GenerationPhase = .idle
     @State private var generationTask: Task<Void, Never>?
     @State private var profileTask: Task<Void, Never>?
@@ -149,6 +151,7 @@ struct ClassChatView: View {
             Text("Add a BYOK provider in Agent Connections before starting a chat. The key stays in this library's Mac Keychain.")
                 .foregroundStyle(WorkspacePalette.muted)
                 .fixedSize(horizontal: false, vertical: true)
+            statusRow
             HStack(spacing: 10) {
                 Button("Add BYOK Provider…", systemImage: "key") {
                     model.presentedEditor = .newBYOKProvider
@@ -339,6 +342,7 @@ struct ClassChatView: View {
             }
             .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 12))
             .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(sending ? WorkspacePalette.accent : WorkspacePalette.line, lineWidth: sending ? 1.5 : 1) }
+            statusRow
             HStack(alignment: .center, spacing: 10) {
                 Menu {
                     ForEach(profiles) { profile in
@@ -361,12 +365,7 @@ struct ClassChatView: View {
                 .menuStyle(.borderlessButton)
                 .frame(maxWidth: 280, alignment: .leading)
                 .accessibilityLabel("Agent provider")
-                if let status {
-                    Label(status, systemImage: "exclamationmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .lineLimit(2)
-                } else {
+                if status == nil {
                     Text("Enter to ask LCP about the saved context")
                         .font(.caption2)
                         .foregroundStyle(WorkspacePalette.muted)
@@ -395,9 +394,34 @@ struct ClassChatView: View {
         .background(.bar)
     }
 
+    @ViewBuilder private var statusRow: some View {
+        if let status {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Label(status, systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                if let errorDetails {
+                    Button("Copy Error Details") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(errorDetails, forType: .string)
+                    }.controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private func reportFailure(_ message: String, stage: AgentRequestDiagnostics.ChatStage,
+                               diagnostics: AgentRequestDiagnostics, error: AgentProviderError? = nil) {
+        diagnostics.chatStage(stage, failed: true, error: error)
+        status = message
+        errorDetails = diagnostics.supportDetails(stage: stage, error: error)
+    }
+
     private func refreshProfiles() {
         profileTask?.cancel()
         let root = model.rootURL
+        let diagnostics = AgentRequestDiagnostics()
+        diagnostics.chatStage(.profiles)
         profileTask = Task { @MainActor in
             do {
                 let values = try await loadProfiles(root).filter(\.enabled)
@@ -408,7 +432,7 @@ struct ClassChatView: View {
                 }
             } catch {
                 guard !Task.isCancelled else { return }
-                status = error.localizedDescription
+                reportFailure(error.localizedDescription, stage: .profiles, diagnostics: diagnostics, error: error as? AgentProviderError)
             }
         }
     }
@@ -422,6 +446,8 @@ struct ClassChatView: View {
             loadingContext = false
             return
         }
+        let diagnostics = AgentRequestDiagnostics()
+        diagnostics.chatStage(.context)
         loadingContext = true
         contextTask = Task { @MainActor in
             // Let SwiftUI commit the chat shell before payload validation and
@@ -432,12 +458,12 @@ struct ClassChatView: View {
                 let prepared = try ClassPlannerService(repository: repository).makeContext(classIDs: ids)
                 guard !Task.isCancelled else { return }
                 context = prepared
-                if !sending { status = nil }
+                if !sending { status = nil; errorDetails = nil }
             } catch is CancellationError {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
-                status = error.localizedDescription
+                reportFailure(error.localizedDescription, stage: .context, diagnostics: diagnostics)
             }
             loadingContext = false
             contextTask = nil
@@ -447,6 +473,7 @@ struct ClassChatView: View {
     private func send() {
         guard generationTask == nil, let repository = model.repository, let profile = selectedProfile else { return }
         let ids = activeClassIDs
+        errorDetails = nil
         guard !ids.isEmpty else {
             status = "No class context is available for this chat."
             return
@@ -458,6 +485,7 @@ struct ClassChatView: View {
         }
         let history = thread?.messages ?? []
         let generationID = UUID()
+        let diagnostics = AgentRequestDiagnostics(id: generationID)
         activeGenerationID = generationID
         activeRequest = request
         streamingText = ""
@@ -483,16 +511,19 @@ struct ClassChatView: View {
                     generationStartedAt = nil
                 }
             }
+            var stage = AgentRequestDiagnostics.ChatStage.credential
             do {
                 // Let SwiftUI render the preparing state before the bounded
                 // context snapshot starts on the main actor.
                 await Task.yield()
                 try Task.checkCancellation()
+                diagnostics.chatStage(stage)
                 let key = try await credentials.apiKeyAsync(for: profile)
                 try Task.checkCancellation()
+                stage = .generation
                 let result = try await ClassPlannerService(repository: repository).generateChatStream(
                     classIDs: ids, history: history, message: request, profile: profile, apiKey: key,
-                    onUpdate: { update in
+                    diagnostics: diagnostics, onUpdate: { update in
                         Task { @MainActor in
                             guard self.activeGenerationID == generationID else { return }
                             if !update.text.isEmpty { self.generationPhase = .streaming }
@@ -502,9 +533,11 @@ struct ClassChatView: View {
                         }
                     })
                 guard activeGenerationID == generationID else { return }
+                diagnostics.chatStage(.save)
                 guard model.saveChatTurn(classID: classID, message: request, response: result.response.text,
                                          profile: profile, context: result.context, usage: result.response.usage) else {
                     draft = request
+                    reportFailure("LCP received the reply but could not save this turn.", stage: .save, diagnostics: diagnostics)
                     return
                 }
                 context = result.context
@@ -515,7 +548,9 @@ struct ClassChatView: View {
             } catch {
                 guard activeGenerationID == generationID else { return }
                 draft = request
-                status = error.localizedDescription
+                let providerError = error as? AgentProviderError
+                let failedStage = stage == .generation && providerError == nil ? .context : stage
+                reportFailure(error.localizedDescription, stage: failedStage, diagnostics: diagnostics, error: providerError)
             }
         }
     }
