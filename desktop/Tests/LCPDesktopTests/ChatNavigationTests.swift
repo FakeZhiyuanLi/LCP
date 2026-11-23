@@ -76,9 +76,10 @@ final class ChatNavigationTests: XCTestCase {
         let session = model.chatSession(for: course.id)
         let attachment = root.appendingPathComponent("Fictional notes.md")
         try Data("Fictional stars".utf8).write(to: attachment)
-        await session.attach([attachment])
+        await session.attach([attachment])?.value
         let fileID = try XCTUnwrap(session.uploads.first?.id)
-        session.automaticallyFileUploads = true
+        XCTAssertTrue(session.automaticallyFileUploads)
+        session.automaticallyFileUploads = false
         session.draft = "A question for class."
         session.send(in: model, using: profile)
         try await waitFor("stream before Stop") { session.generation?.update != nil }
@@ -87,7 +88,7 @@ final class ChatNavigationTests: XCTestCase {
         XCTAssertEqual(session.draft, "A question for class.")
         XCTAssertTrue(session.status?.contains("cancelled") == true)
         XCTAssertEqual(session.uploads.map(\.id), [fileID])
-        XCTAssertTrue(session.automaticallyFileUploads)
+        XCTAssertFalse(session.automaticallyFileUploads)
         XCTAssertTrue(model.chatSession(for: nil).uploads.isEmpty)
         session.send(in: model, using: profile)
         try await waitFor("second stream") { session.generation?.update != nil && PausedChatStream.requests.count == 2 }
@@ -96,8 +97,14 @@ final class ChatNavigationTests: XCTestCase {
         try await waitFor("failed reply") { session.generation == nil }
         XCTAssertEqual(session.draft, "A question for class.")
         XCTAssertNotNil(session.errorDetails)
+        XCTAssertFalse(session.automaticallyFileUploads)
         XCTAssertNil(model.chatThread(classID: course.id))
         XCTAssertTrue(model.chatSession(for: nil).draft.isEmpty)
+        session.send(in: model, using: profile)
+        try await waitFor("retry stream") { PausedChatStream.requests.count == 3 }
+        try XCTUnwrap(PausedChatStream.requests.last).finish()
+        try await waitFor("new draft") { session.generation == nil && session.uploads.isEmpty }
+        XCTAssertTrue(session.automaticallyFileUploads)
     }
 
     func testStreamingFollowsLatestUntilReaderScrollsUp() async throws {

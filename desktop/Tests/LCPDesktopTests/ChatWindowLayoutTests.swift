@@ -93,8 +93,18 @@ final class ChatWindowLayoutTests: XCTestCase {
             XCTAssertGreaterThan(history.bounds.height, 300)
             let file = root.appendingPathComponent("Fictional seminar notes.txt")
             try Data("Notes from the seminar.".utf8).write(to: file)
-            await session.attach([file])
+            let pasteboard = NSPasteboard.withUniqueName()
+            defer { pasteboard.releaseGlobally() }
+            XCTAssertTrue(pasteboard.writeObjects([file as NSURL]))
+            let nativeEditor = try XCTUnwrap(editor as? ChatDraftTextView)
+            let draftBeforeDrop = session.draft
+            XCTAssertTrue(nativeEditor.attachFiles(from: pasteboard))
+            XCTAssertFalse(session.canSend, "Wait for the dropped bytes before sending the draft.")
+            for _ in 0..<100 where session.loadingFiles { try await Task.sleep(for: .milliseconds(20)) }
             XCTAssertEqual(session.uploads.count, 1)
+            XCTAssertEqual(session.uploads.first?.attachment.filename, file.lastPathComponent)
+            XCTAssertEqual(session.draft, draftBeforeDrop)
+            XCTAssertTrue(session.automaticallyFileUploads)
             content.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(history.bounds.height, 250)
             session.draft = ""

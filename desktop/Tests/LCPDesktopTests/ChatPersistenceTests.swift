@@ -60,7 +60,7 @@ final class ChatPersistenceTests: XCTestCase {
         let bytes = Data("Fictional astronomical tables.".utf8)
         let url = root.appendingPathComponent("Tables.md")
         try bytes.write(to: url)
-        await session.attach([url])
+        await session.attach([url])?.value
         let upload = try XCTUnwrap(session.uploads.first)
         XCTAssertTrue(session.canSend, "A file can start a turn on its own.")
         XCTAssertTrue(model.chatSession(for: course.id).uploads.isEmpty)

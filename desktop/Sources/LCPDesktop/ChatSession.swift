@@ -45,36 +45,37 @@ final class ChatSession: ObservableObject {
     let classID: UUID?
     @Published var draft = ""
     @Published var uploads: [ChatUpload] = []
-    @Published var automaticallyFileUploads = false
+    @Published var automaticallyFileUploads = true
     @Published private(set) var loadingFiles = false
     var canSend: Bool { !loadingFiles && (!uploads.isEmpty || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
 
-    func attach(_ urls: [URL]) async {
-        guard !urls.isEmpty, !loadingFiles, generation == nil else { return }
+    @discardableResult
+    func attach(_ urls: [URL]) -> Task<Void, Never>? {
+        guard !urls.isEmpty, !loadingFiles, generation == nil else { return nil }
         guard urls.count <= ChatAttachment.maximumCount - uploads.count else {
             status = "Attach up to \(ChatAttachment.maximumCount) files per message."
-            return
+            return nil
         }
         loadingFiles = true
-        defer { loadingFiles = false }
         let remaining = ChatAttachment.maximumBytes - uploads.reduce(0) { $0 + Int($1.attachment.original.byteCount) }
-        do {
-            let added = try await Task.detached(priority: .userInitiated) { [remaining] in
-                var budget = remaining
-                var result: [ChatUpload] = []
-                for url in urls {
-                    let file = try ChatUpload.read(url, remainingBytes: budget)
-                    budget -= Int(file.attachment.original.byteCount)
-                    result.append(file)
-                }
-                return result
-            }.value
-            uploads.append(contentsOf: added)
-            status = nil
-            errorDetails = nil
-        } catch ContextServiceError.fileTooLarge {
-            status = "Attachments can total up to 32 MiB per message."
-        } catch { status = error.localizedDescription }
+        return Task {
+            defer { loadingFiles = false }
+            do {
+                let added = try await Task.detached(priority: .userInitiated) {
+                    var budget = remaining
+                    return try urls.map { url in
+                        let file = try ChatUpload.read(url, remainingBytes: budget)
+                        budget -= Int(file.attachment.original.byteCount)
+                        return file
+                    }
+                }.value
+                uploads.append(contentsOf: added)
+                status = nil
+                errorDetails = nil
+            } catch ContextServiceError.fileTooLarge {
+                status = "Attachments can total up to 32 MiB per message."
+            } catch { status = error.localizedDescription }
+        }
     }
     @Published var selectedProfileID: UUID?
     @Published var context: ContextSummary?
@@ -96,7 +97,7 @@ final class ChatSession: ObservableObject {
         errorDetails = nil
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let files = uploads
-        let autoFile = automaticallyFileUploads && !files.isEmpty
+        let autoFile = automaticallyFileUploads
         let history = model.chatThread(classID: classID)?.messages ?? []
         let root = model.rootURL
         let providers = model.chatProviders
@@ -105,7 +106,7 @@ final class ChatSession: ObservableObject {
         generation = Generation(id: id, question: question, providerName: profile.name, filenames: files.map(\.attachment.filename))
         draft = ""
         uploads = []
-        automaticallyFileUploads = false
+        automaticallyFileUploads = true
         status = nil
 
         task = Task { [self, weak model] in
@@ -137,7 +138,7 @@ final class ChatSession: ObservableObject {
                 try Task.checkCancellation()
                 guard let model, model.repository === repository, model.rootURL == root else { return }
                 saveReply(in: model, question: question, result: result, profile: profile, diagnostics: diagnostics,
-                          automaticallyFileUploads: autoFile)
+                          automaticallyFileUploads: autoFile && !files.isEmpty)
             } catch {
                 draft = question
                 uploads = files

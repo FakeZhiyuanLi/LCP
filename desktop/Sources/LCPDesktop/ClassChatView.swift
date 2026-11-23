@@ -24,6 +24,7 @@ struct ClassChatView: View {
     private var messages: [ChatMessage] { model.chatThread(classID: session.classID)?.messages ?? [] }
     private var unsavedReply: UnsavedChatReply? { model.unsavedChatReplies[session.classID] }
     private var latestReplyID: UUID? { session.generation?.id ?? unsavedReply?.diagnostics.id ?? messages.last?.id }
+    private var canAttach: Bool { !sending && !session.loadingFiles && unsavedReply == nil }
 
     init(model: WorkspaceModel, classID: UUID? = nil) {
         self.model = model
@@ -48,6 +49,26 @@ struct ClassChatView: View {
         // fit the pane even when its wrapped text reports a tall minimum.
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
         .background(WorkspacePalette.canvas)
+        .contentShape(Rectangle())
+        .dropDestination(for: ChatDroppedFile.self) { files, _ in
+            attachDrop(files.map(\.url))
+        } isTargeted: { hoveringFiles = $0 }
+        .overlay {
+            if hoveringFiles && canAttach {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(WorkspacePalette.accent.opacity(0.08))
+                        .strokeBorder(WorkspacePalette.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                    Label("Drop to attach files", systemImage: "paperclip")
+                        .font(.headline)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(.regularMaterial, in: Capsule())
+                }
+                .padding(3)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
         .task(id: ObjectIdentifier(session)) { await refreshProfiles() }
         .onChange(of: model.state.revision) { _, _ in
             guard !sending, session.context != nil else { return }
@@ -57,6 +78,10 @@ struct ClassChatView: View {
             contextTask?.cancel()
             loadingContext = false
         }
+    }
+
+    private func attachDrop(_ urls: [URL]) -> Bool {
+        canAttach && session.attach(urls) != nil
     }
 
     private func header(_ proxy: ScrollViewProxy) -> some View {
@@ -311,23 +336,12 @@ struct ClassChatView: View {
         .padding(.vertical, 8)
         .modifier(ChatColumn())
         .background(WorkspacePalette.canvas)
-        .overlay {
-            if hoveringFiles {
-                RoundedRectangle(cornerRadius: 12).strokeBorder(WorkspacePalette.accent, lineWidth: 2)
-                    .allowsHitTesting(false)
-            }
-        }
         .fileImporter(isPresented: $choosingFiles, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
             switch result {
-            case .success(let urls): Task { await session.attach(urls) }
+            case .success(let urls): _ = attachDrop(urls)
             case .failure(let error): if (error as NSError).code != NSUserCancelledError { session.status = error.localizedDescription }
             }
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            guard !sending, !session.loadingFiles, unsavedReply == nil, !urls.isEmpty, urls.allSatisfy(\.isFileURL) else { return false }
-            Task { await session.attach(urls) }
-            return true
-        } isTargeted: { hoveringFiles = $0 }
     }
 
     @ViewBuilder private var uploadControls: some View {
@@ -340,7 +354,6 @@ struct ClassChatView: View {
                             Text(upload.attachment.filename).lineLimit(1)
                             Button {
                                 session.uploads.removeAll { $0.id == upload.id }
-                                if session.uploads.isEmpty { session.automaticallyFileUploads = false }
                             } label: { Image(systemName: "xmark.circle.fill") }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Remove \(upload.attachment.filename)")
@@ -354,7 +367,7 @@ struct ClassChatView: View {
             if !activeClassIDs.isEmpty {
                 Toggle("Let the agent file these uploads in class materials", isOn: $session.automaticallyFileUploads)
                     .toggleStyle(.checkbox).font(.caption)
-                    .help("Applies to files in this message and classes in this conversation.")
+                    .help("When you send, the agent can save suggested files to a class in this chat. Turn off to review its suggestions first.")
             }
         }
     }
@@ -371,12 +384,9 @@ struct ClassChatView: View {
             .hidden()
             .accessibilityHidden(true)
             .overlay(alignment: .topLeading) {
-                TextEditor(text: $session.draft)
-                    .font(.body)
-                    .scrollContentBackground(.hidden)
+                ChatDraftEditor(text: $session.draft, isEditable: !sending, acceptsFiles: canAttach,
+                                attach: attachDrop, fileHover: { hoveringFiles = $0 })
                     .focused($composerFocused)
-                    .disabled(sending)
-                    .accessibilityLabel("Chat message")
                     .overlay(alignment: .topLeading) {
                         if session.draft.isEmpty && !sending {
                             Text(globalScope ? "Ask about your university context…" : "Ask about this class…")
@@ -396,9 +406,9 @@ struct ClassChatView: View {
                 Label("Attach Files…", systemImage: "paperclip").labelStyle(.iconOnly)
             }
             .buttonStyle(.borderless)
-            .help("Attach files to this message")
+            .help("Choose files or drag them into the chat")
             .accessibilityLabel("Attach files")
-            .disabled(sending || session.loadingFiles || unsavedReply != nil)
+            .disabled(!canAttach)
             if session.loadingFiles { ProgressView().controlSize(.small) }
             Menu {
                 if profiles.isEmpty {
@@ -553,6 +563,19 @@ struct ClassChatView: View {
         if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
         if value >= 1_000 { return String(format: "%.1fk", Double(value) / 1_000) }
         return "\(value)"
+    }
+}
+
+private struct ChatDroppedFile: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(importedContentType: .fileURL) { data in
+            guard let url = URL(dataRepresentation: data, relativeTo: nil), url.isFileURL else {
+                throw ContextServiceError.invalidFile
+            }
+            return ChatDroppedFile(url: url)
+        }
     }
 }
 

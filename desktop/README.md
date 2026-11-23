@@ -142,15 +142,16 @@ one persistent conversation across your active classes for questions such as
 weekly priorities, deadline conflicts, and study planning. Both conversations
 survive relaunch, library backup, and restore.
 
-Use the paperclip or drop files into the composer. You can send a file on
+Use the paperclip or drag files from Finder onto the conversation or message box. You can send a file on
 its own or include a question. A message can carry eight files totaling 32 MiB.
 Your provider receives document text or, for supported images, PDFs and Office
 documents, the file itself. Other formats can be kept as originals in the chat.
 Long messages are sent in full, subject to your provider’s context window.
 
 For reusable sources, the agent can suggest a title and a destination class.
-Choose **Save** on the file, or turn on **Let the agent file these uploads in
-class materials** before sending to apply its choices for this message.
+**Let the agent file these uploads in class materials** starts on for each
+new message. Turn it off before sending to review the suggestions and choose
+**Save** yourself.
 The file menu also lets you choose a class or save a copy to your Mac.
 
 Before each reply, LCP rebuilds a bounded snapshot from the selected scope. The
