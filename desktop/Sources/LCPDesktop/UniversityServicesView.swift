@@ -115,6 +115,7 @@ private struct UniversitySourceBrowser: View {
     @State private var isError = false
     @State private var requestID: UUID?
     @State private var request: Task<Void, Never>?
+    @State private var connectionTask: Task<Void, Never>?
     @State private var courseworkReview: CourseworkImportReview?
 
     private var credentials: UniversityCredentials { .forLibrary(model.rootURL) }
@@ -230,15 +231,8 @@ private struct UniversitySourceBrowser: View {
                 }
             }
         }
-        .onAppear {
-            readConnection()
-            if source == .canvas,
-               UniversityConnectionStatus.read(source, credentials: credentials).isConfigured,
-               !loadedCourses {
-                loadCourses()
-            }
-        }
-        .onDisappear { cancelRequest() }
+        .onAppear { readConnection() }
+        .onDisappear { cancelRequest(); connectionTask?.cancel() }
         .sheet(isPresented: $managingConnection) {
             UniversityConnectionManager(service: source, model: model, onChange: connectionChanged)
         }
@@ -396,7 +390,18 @@ private struct UniversitySourceBrowser: View {
     }
 
     private func readConnection() {
-        connection = UniversityConnectionStatus.read(source, credentials: credentials)
+        connectionTask?.cancel()
+        let source = source
+        let credentials = credentials
+        connectionTask = Task { @MainActor in
+            let next = await UniversityConnectionStatus.readAsync(source, credentials: credentials)
+            guard !Task.isCancelled else { return }
+            connection = next
+            if source == .canvas, next.isConfigured, !loadedCourses {
+                loadCourses()
+            }
+            connectionTask = nil
+        }
     }
 
     private func connectionChanged() {
@@ -421,7 +426,7 @@ private struct UniversitySourceBrowser: View {
             loadedCourses = false
         }
         run("Loading Canvas courses…") {
-            let client = UciCanvasClient(token: try credentials.canvasToken())
+            let client = UciCanvasClient(token: try await credentials.canvasTokenAsync())
             let page = try await client.courses(cursor: cursor)
             try checkContext()
             append(page.items, to: &courses)
@@ -439,12 +444,12 @@ private struct UniversitySourceBrowser: View {
         run("Loading \(source.rawValue) materials…") {
             let page: UniversityPage
             if let google = source.googleKind {
-                let token = try await credentials.googleToken(google)
+                let token = try await credentials.googleTokenAsync(google)
                 try checkContext()
                 page = try await GoogleUniversityClient(token: token).items(kind: google, query: query, cursor: cursor)
             } else {
                 guard let courseID else { return }
-                let client = UciCanvasClient(token: try credentials.canvasToken())
+                let client = UciCanvasClient(token: try await credentials.canvasTokenAsync())
                 if kind == .modules, let selectedModule {
                     page = try await client.moduleItems(courseID: courseID, moduleID: selectedModule.id, cursor: cursor)
                 } else {
@@ -467,7 +472,7 @@ private struct UniversitySourceBrowser: View {
         selectedAttachmentID = nil
         attachmentMessageID = nil
         run("Loading Gmail attachments…") {
-            let token = try await credentials.googleToken(.gmail)
+            let token = try await credentials.googleTokenAsync(.gmail)
             try checkContext()
             let found = try await GoogleUniversityClient(token: token).gmailAttachments(for: item)
             try checkContext()
@@ -484,7 +489,7 @@ private struct UniversitySourceBrowser: View {
             let provider: String
             let remoteID: String
             if let google = source.googleKind {
-                let token = try await credentials.googleToken(google)
+                let token = try await credentials.googleTokenAsync(google)
                 try checkContext()
                 doc = try await GoogleUniversityClient(token: token).document(kind: google, item: item)
                 provider = google == .drive ? "google-drive" : google == .gmail ? "gmail" : "google-calendar"
@@ -498,7 +503,7 @@ private struct UniversitySourceBrowser: View {
                 }
             } else {
                 guard let courseID else { return }
-                let client = UciCanvasClient(token: try credentials.canvasToken())
+                let client = UciCanvasClient(token: try await credentials.canvasTokenAsync())
                 doc = try await client.document(courseID: courseID, kind: kind, item: item)
                 provider = "uci-canvas"
                 guard let key = doc.remoteID, !key.isEmpty else {

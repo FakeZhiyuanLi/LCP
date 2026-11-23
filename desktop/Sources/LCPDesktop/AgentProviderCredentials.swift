@@ -43,15 +43,23 @@ final class AgentProviderCredentials {
 
     private init(service: String) { self.service = service }
 
-    private func query(_ account: String) -> [String: Any] {
+    private nonisolated static func query(service: String, account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: service,
          kSecAttrAccount as String: account,
          kSecAttrSynchronizable as String: false]
     }
 
+    private func query(_ account: String) -> [String: Any] {
+        Self.query(service: service, account: account)
+    }
+
     private func read(_ account: String) throws -> Data? {
-        var request = query(account)
+        try Self.read(service: service, account: account)
+    }
+
+    private nonisolated static func read(service: String, account: String) throws -> Data? {
+        var request = query(service: service, account: account)
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         var value: CFTypeRef?
@@ -62,7 +70,11 @@ final class AgentProviderCredentials {
     }
 
     private func write(_ data: Data, _ account: String) throws {
-        let request = query(account)
+        try Self.write(data, service: service, account: account)
+    }
+
+    private nonisolated static func write(_ data: Data, service: String, account: String) throws {
+        let request = query(service: service, account: account)
         let update = [kSecValueData as String: data]
         let status = SecItemUpdate(request as CFDictionary, update as CFDictionary)
         if status == errSecSuccess { return }
@@ -75,13 +87,69 @@ final class AgentProviderCredentials {
     }
 
     private func remove(_ account: String) throws {
-        let status = SecItemDelete(query(account) as CFDictionary)
+        try Self.remove(service: service, account: account)
+    }
+
+    private nonisolated static func remove(service: String, account: String) throws {
+        let status = SecItemDelete(query(service: service, account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw AgentProviderCredentialError.keychain }
     }
 
     func profilesList() throws -> [AgentProviderProfile] {
-        guard let bytes = try read(indexAccount) else { return [] }
-        guard let values = try? JSONDecoder().decode([AgentProviderProfile].self, from: bytes) else {
+        try Self.loadProfiles(service: service)
+    }
+
+    /// Keychain access may wait for user approval or an unlocked keychain. Keep
+    /// that wait off the main actor so a chat route can still render its shell.
+    func profilesListAsync() async throws -> [AgentProviderProfile] {
+        let service = service
+        return try await Task.detached(priority: .userInitiated) {
+            try Self.loadProfiles(service: service)
+        }.value
+    }
+
+    func apiKeyAsync(for profile: AgentProviderProfile) async throws -> String {
+        let service = service
+        let account = Self.secretAccount(for: profile.id)
+        return try await Task.detached(priority: .userInitiated) {
+            guard let bytes = try Self.read(service: service, account: account),
+                  let value = String(data: bytes, encoding: .utf8) else {
+                throw AgentProviderCredentialError.missingConfiguration
+            }
+            return try AgentProviderProfile.validateAPIKey(value)
+        }.value
+    }
+
+    func saveAsync(profile: AgentProviderProfile, apiKey: String) async throws {
+        let profile = try profile.validated()
+        let key = try AgentProviderProfile.validateAPIKey(apiKey)
+        let service = service
+        try await Task.detached(priority: .userInitiated) {
+            try Self.save(service: service, profile: profile, apiKey: key)
+        }.value
+    }
+
+    func removeAsync(profile: AgentProviderProfile) async throws {
+        let service = service
+        try await Task.detached(priority: .userInitiated) {
+            try Self.remove(service: service, profile: profile)
+        }.value
+    }
+
+    nonisolated private static func loadProfiles(service: String) throws -> [AgentProviderProfile] {
+        let request: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "profiles",
+            kSecAttrSynchronizable as String: false,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var value: CFTypeRef?
+        let status = SecItemCopyMatching(request as CFDictionary, &value)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess, let bytes = value as? Data,
+              let values = try? JSONDecoder().decode([AgentProviderProfile].self, from: bytes) else {
             throw AgentProviderCredentialError.keychain
         }
         return values.sorted { $0.updatedAt > $1.updatedAt }
@@ -102,36 +170,44 @@ final class AgentProviderCredentials {
     func save(profile: AgentProviderProfile, apiKey: String) throws {
         let profile = try profile.validated()
         let key = try AgentProviderProfile.validateAPIKey(apiKey)
-        let previousValues = try profilesList()
-        let previousSecret = try read(secretAccount(for: profile.id))
+        try Self.save(service: service, profile: profile, apiKey: key)
+    }
+
+    private nonisolated static func save(service: String, profile: AgentProviderProfile, apiKey: String) throws {
+        let previousValues = try loadProfiles(service: service)
+        let previousSecret = try read(service: service, account: secretAccount(for: profile.id))
         var values = previousValues
         values.removeAll { $0.id == profile.id }
         values.append(profile)
-        try write(try JSONEncoder().encode(values), indexAccount)
+        try write(try JSONEncoder().encode(values), service: service, account: "profiles")
         do {
-            try write(Data(key.utf8), secretAccount(for: profile.id))
+            try write(Data(apiKey.utf8), service: service, account: secretAccount(for: profile.id))
         } catch {
-            if previousValues.isEmpty { try? remove(indexAccount) }
-            else { try? write(try JSONEncoder().encode(previousValues), indexAccount) }
-            if let previousSecret { try? write(previousSecret, secretAccount(for: profile.id)) }
-            else { try? remove(secretAccount(for: profile.id)) }
+            if previousValues.isEmpty { try? remove(service: service, account: "profiles") }
+            else { try? write(try JSONEncoder().encode(previousValues), service: service, account: "profiles") }
+            if let previousSecret { try? write(previousSecret, service: service, account: secretAccount(for: profile.id)) }
+            else { try? remove(service: service, account: secretAccount(for: profile.id)) }
             throw error
         }
     }
 
     func remove(profile: AgentProviderProfile) throws {
-        let previousValues = try profilesList()
-        let previousSecret = try read(secretAccount(for: profile.id))
+        try Self.remove(service: service, profile: profile)
+    }
+
+    private nonisolated static func remove(service: String, profile: AgentProviderProfile) throws {
+        let previousValues = try loadProfiles(service: service)
+        let previousSecret = try read(service: service, account: secretAccount(for: profile.id))
         var values = previousValues
         values.removeAll { $0.id == profile.id }
         do {
-            if values.isEmpty { try remove(indexAccount) }
-            else { try write(try JSONEncoder().encode(values), indexAccount) }
-            try remove(secretAccount(for: profile.id))
+            if values.isEmpty { try remove(service: service, account: "profiles") }
+            else { try write(try JSONEncoder().encode(values), service: service, account: "profiles") }
+            try remove(service: service, account: secretAccount(for: profile.id))
         } catch {
-            if previousValues.isEmpty { try? remove(indexAccount) }
-            else { try? write(try JSONEncoder().encode(previousValues), indexAccount) }
-            if let previousSecret { try? write(previousSecret, secretAccount(for: profile.id)) }
+            if previousValues.isEmpty { try? remove(service: service, account: "profiles") }
+            else { try? write(try JSONEncoder().encode(previousValues), service: service, account: "profiles") }
+            if let previousSecret { try? write(previousSecret, service: service, account: secretAccount(for: profile.id)) }
             throw error
         }
     }
@@ -156,7 +232,9 @@ final class AgentProviderCredentials {
         return ImportedCodexProvider(baseURL: baseURL, model: model, apiKey: apiKey)
     }
 
-    private func secretAccount(for id: UUID) -> String { "secret.\(id.uuidString)" }
+    private nonisolated static func secretAccount(for id: UUID) -> String { "secret.\(id.uuidString)" }
+
+    private func secretAccount(for id: UUID) -> String { Self.secretAccount(for: id) }
 }
 
 private enum SHA256Digest {

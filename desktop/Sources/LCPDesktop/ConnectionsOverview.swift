@@ -5,6 +5,7 @@ struct ConnectionsOverview: View {
     @ObservedObject var model: WorkspaceModel
     @State private var statuses: [UniversitySource: UniversityConnectionStatus] = [:]
     @State private var managing: UniversitySource?
+    @State private var statusTask: Task<Void, Never>?
 
     private let accounts: [UniversitySource] = [.canvas, .drive, .gmail, .calendar]
 
@@ -60,6 +61,7 @@ struct ConnectionsOverview: View {
         }
         .navigationTitle("Connections")
         .onAppear(perform: refresh)
+        .onDisappear { statusTask?.cancel() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
         .sheet(item: $managing, onDismiss: refresh) { service in
             UniversityConnectionManager(service: service, model: model, onChange: {
@@ -103,7 +105,18 @@ struct ConnectionsOverview: View {
 
     private func refresh() {
         let credentials = UniversityCredentials.forLibrary(model.rootURL)
-        statuses = Dictionary(uniqueKeysWithValues: accounts.map { ($0, UniversityConnectionStatus.read($0, credentials: credentials)) })
+        statusTask?.cancel()
+        let accounts = accounts
+        statusTask = Task { @MainActor in
+            var next: [UniversitySource: UniversityConnectionStatus] = [:]
+            for service in accounts {
+                guard !Task.isCancelled else { return }
+                next[service] = await UniversityConnectionStatus.readAsync(service, credentials: credentials)
+            }
+            guard !Task.isCancelled else { return }
+            statuses = next
+            statusTask = nil
+        }
     }
 }
 

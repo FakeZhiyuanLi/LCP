@@ -74,10 +74,10 @@ extension WorkspaceModel {
 
     private func linkDriveFolder(for id: UUID, request: ClassDriveFolder, repository: ContextRepository) async throws {
         let credentials = UniversityCredentials.forLibrary(repository.rootURL)
-        guard try credentials.isGoogleConnected(.drive) else {
+        guard try await credentials.isGoogleConnectedAsync(.drive) else {
             throw DesktopUIError.message("Connect Google Drive in Connections to set up \(request.name).")
         }
-        let token = try await credentials.googleToken(.drive)
+        let token = try await credentials.googleTokenAsync(.drive)
         let client = GoogleUniversityClient(token: token)
 
         func verifyRequest(in state: ContextState) throws -> Int {
@@ -90,7 +90,7 @@ extension WorkspaceModel {
 
         func resolve(_ name: String, under parent: String) async throws -> GoogleClassFolder {
             if let found = try await client.findClassFolder(named: name, under: parent) { return found }
-            guard try credentials.canCreateDriveFolders() else {
+            guard try await credentials.canCreateDriveFoldersAsync() else {
                 throw DesktopUIError.message("In Connections, open Google Drive → Manage… → Enable Folder Creation… to create \(name).")
             }
             // Use the same account and credential for the lookup and create.
@@ -103,7 +103,7 @@ extension WorkspaceModel {
                 }
                 self.state = repository.state
             }
-            guard try await credentials.driveFolderToken() == token else { throw UniversityCredentialError.changed }
+            guard try await credentials.driveFolderTokenAsync() == token else { throw UniversityCredentialError.changed }
             try repository.refresh()
             _ = try verifyRequest(in: repository.state)
             guard let reservedID, repository.state.reservedDriveFolder(named: name, under: parent) == reservedID
@@ -126,7 +126,7 @@ extension WorkspaceModel {
         } else {
             folder = try await resolve(request.name, under: root.id)
         }
-        guard try await credentials.googleToken(.drive) == token else { throw UniversityCredentialError.changed }
+        guard try await credentials.googleTokenAsync(.drive) == token else { throw UniversityCredentialError.changed }
         try repository.update { state in
             let index = try verifyRequest(in: state)
             state.classes[index].driveFolder?.folderID = folder.id

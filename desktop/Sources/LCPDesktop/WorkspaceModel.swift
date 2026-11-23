@@ -70,9 +70,24 @@ final class WorkspaceModel: ObservableObject {
     private var lastAttemptedFeedIndex: Data?
     private var lastFeedError: String?
     private var automaticFeedSuspendedIndex: Data?
+    private var lastRepositoryFingerprint: RepositoryFingerprint?
     private var queuedWorkspaceAction: String?
     private var runningWorkspaceAction: String?
     var repository: ContextRepository?
+
+    private struct RepositoryFingerprint: Equatable {
+        let store: FileStamp
+        let wal: FileStamp
+        let sharedMemory: FileStamp
+        let schema: FileStamp
+    }
+
+    private struct FileStamp: Equatable {
+        let exists: Bool
+        let size: UInt64
+        let modificationTime: TimeInterval
+        let inode: UInt64
+    }
 
     var selectedClassID: UUID? {
         if case .classDetail(let id) = selection { return id }
@@ -135,6 +150,7 @@ final class WorkspaceModel: ObservableObject {
             refresh()
             if arguments.contains("--demo") && state.classes.isEmpty { try seedDemo() }
             else { restorePresentation() }
+            lastRepositoryFingerprint = repositoryFingerprint()
             isReady = true
             canvasSyncStatus = canvasSyncInterval == .manual
                 ? "Canvas coursework refresh is manual."
@@ -156,7 +172,16 @@ final class WorkspaceModel: ObservableObject {
             try repository.refresh()
             if state != repository.state { state = repository.state }
             missingPayloadCount = repository.unavailablePayloads.count
+            lastRepositoryFingerprint = repositoryFingerprint()
         } catch { errorMessage = "The library could not be refreshed. Current context is preserved. \(error.localizedDescription)" }
+    }
+
+    @discardableResult
+    func refreshIfChanged() -> Bool {
+        guard repository != nil else { return false }
+        guard repositoryFingerprint() != lastRepositoryFingerprint else { return false }
+        refresh()
+        return true
     }
     func perform(_ operation: () throws -> Void) {
         do { try operation(); refresh() }
@@ -270,19 +295,6 @@ final class WorkspaceModel: ObservableObject {
     private func startCanvasSync(force: Bool) {
         guard isReady, repository != nil, !restorePending, !canvasSyncInProgress else { return }
         if !force, canvasSyncInterval == .manual { return }
-        let credentials = UniversityCredentials.forLibrary(rootURL)
-        guard (try? credentials.hasCanvasToken()) == true else {
-            canvasSyncStatus = "Connect UCI Canvas to enable automatic coursework refresh."
-            canvasSyncLastAttempt = Date.now
-            return
-        }
-        let token: String
-        do { token = try credentials.canvasToken() }
-        catch {
-            canvasSyncStatus = "Connect UCI Canvas to enable automatic coursework refresh."
-            canvasSyncLastAttempt = Date.now
-            return
-        }
         let activeClasses = state.classes.filter { !$0.archived }
         guard !activeClasses.isEmpty else {
             canvasSyncStatus = "Add a class before enabling Canvas coursework refresh."
@@ -303,8 +315,8 @@ final class WorkspaceModel: ObservableObject {
         }
         canvasSyncLastAttempt = Date.now
         canvasSyncInProgress = true
-        canvasSyncStatus = "Refreshing Canvas coursework…"
-        let client = UciCanvasClient(token: token)
+        canvasSyncStatus = "Checking the Canvas connection…"
+        let credentials = UniversityCredentials.forLibrary(rootURL)
         canvasSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
@@ -312,6 +324,10 @@ final class WorkspaceModel: ObservableObject {
                 self.canvasSyncTask = nil
             }
             do {
+                let token = try await credentials.canvasTokenAsync()
+                try Task.checkCancellation()
+                self.canvasSyncStatus = "Refreshing Canvas coursework…"
+                let client = UciCanvasClient(token: token)
                 let courses = try await client.allCourses()
                 try Task.checkCancellation()
                 let matching = CanvasCourseworkSyncService.match(classes: importingClasses, courses: courses)
@@ -846,7 +862,7 @@ final class WorkspaceModel: ObservableObject {
     }
     func pollLocalChanges() {
         guard !restorePending else { return }
-        refresh()
+        refreshIfChanged()
         processPendingDriveFolders()
         maybeSyncCanvas()
         guard let repository else { return }
@@ -906,6 +922,29 @@ final class WorkspaceModel: ObservableObject {
         guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_size >= 0, info.st_size <= 8_388_608,
               let bytes = try? handle.read(upToCount: 8_388_609), bytes.count <= 8_388_608 else { return nil }
         return bytes
+    }
+
+    private func repositoryFingerprint() -> RepositoryFingerprint? {
+        guard repository != nil else { return nil }
+        let root = rootURL.standardizedFileURL
+        return RepositoryFingerprint(
+            store: fileStamp(root.appendingPathComponent("Library.store")),
+            wal: fileStamp(root.appendingPathComponent("Library.store-wal")),
+            sharedMemory: fileStamp(root.appendingPathComponent("Library.store-shm")),
+            schema: fileStamp(root.appendingPathComponent("schema-version.json"))
+        )
+    }
+
+    private func fileStamp(_ url: URL) -> FileStamp {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            return FileStamp(exists: false, size: 0, modificationTime: 0, inode: 0)
+        }
+        return FileStamp(
+            exists: true,
+            size: (attributes[.size] as? NSNumber)?.uint64Value ?? 0,
+            modificationTime: (attributes[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate ?? 0,
+            inode: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
+        )
     }
     private func persistPresentation() {
         guard repository != nil, let selection, let bytes = try? JSONEncoder().encode(selection) else { return }

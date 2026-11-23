@@ -16,6 +16,7 @@ struct ClassPlannerView: View {
     @State private var generating = false
     @State private var loadingContext = false
     @State private var status: String?
+    @State private var profileTask: Task<Void, Never>?
 
     private var credentials: AgentProviderCredentials { AgentProviderCredentials.forLibrary(model.rootURL) }
     private var selectedProfile: AgentProviderProfile? { profiles.first { $0.id == selectedProfileID } }
@@ -61,24 +62,24 @@ struct ClassPlannerView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onAppear {
-            let initialIDs = activeClassIDs
             if globalScope && selectedClassIDs.isEmpty {
                 selectedClassIDs = Set(activeClasses.map(\.id))
             }
             refreshProfiles()
-            refreshContext(classIDs: initialIDs.isEmpty && globalScope ? activeClasses.map(\.id) : initialIDs)
         }
         .onChange(of: model.rootURL) { _, _ in
             refreshProfiles()
-            refreshContext()
+            if context != nil { refreshContext() }
         }
         .onChange(of: selectedClassIDs) { _, _ in
-            guard globalScope else { return }
+            guard globalScope, context != nil else { return }
             refreshContext()
         }
         .onChange(of: model.state.revision) { _, _ in
+            guard context != nil else { return }
             refreshContext()
         }
+        .onDisappear { profileTask?.cancel() }
     }
 
     private var header: some View {
@@ -234,7 +235,7 @@ struct ClassPlannerView: View {
             } else {
                 Text(activeClassIDs.isEmpty
                      ? "Select at least one class to prepare a verified context snapshot."
-                     : "LCP is preparing a verified snapshot of \(globalScope ? "the selected classes" : "this class").")
+                     : "LCP prepares a verified snapshot when you refresh or generate a plan.")
                     .font(.callout)
                     .foregroundStyle(WorkspacePalette.muted)
             }
@@ -280,12 +281,21 @@ struct ClassPlannerView: View {
     }
 
     private func refreshProfiles() {
-        do {
-            profiles = try credentials.profilesList().filter(\.enabled)
-            if selectedProfileID == nil || !profiles.contains(where: { $0.id == selectedProfileID }) {
-                selectedProfileID = profiles.first?.id
+        profileTask?.cancel()
+        let credentials = credentials
+        profileTask = Task { @MainActor in
+            do {
+                let values = try await credentials.profilesListAsync().filter(\.enabled)
+                guard !Task.isCancelled else { return }
+                profiles = values
+                if selectedProfileID == nil || !profiles.contains(where: { $0.id == selectedProfileID }) {
+                    selectedProfileID = profiles.first?.id
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                status = error.localizedDescription
             }
-        } catch { status = error.localizedDescription }
+        }
     }
 
     private func refreshContext(classIDs: [UUID]? = nil) {
@@ -311,9 +321,6 @@ struct ClassPlannerView: View {
             status = "Select at least one class before generating a plan."
             return
         }
-        let key: String
-        do { key = try credentials.apiKey(for: profile) }
-        catch { status = error.localizedDescription; return }
         generating = true
         plan = nil
         status = nil
@@ -321,6 +328,7 @@ struct ClassPlannerView: View {
         Task { @MainActor in
             defer { generating = false }
             do {
+                let key = try await credentials.apiKeyAsync(for: profile)
                 let result = try await ClassPlannerService(repository: repository).generate(
                     classIDs: requestedClassIDs, objective: request, profile: profile, apiKey: key)
                 context = result.context

@@ -16,6 +16,8 @@ struct ClassChatView: View {
     @State private var status: String?
     @State private var generationPhase: GenerationPhase = .idle
     @State private var generationTask: Task<Void, Never>?
+    @State private var profileTask: Task<Void, Never>?
+    @State private var contextTask: Task<Void, Never>?
     @State private var activeGenerationID: UUID?
     @State private var activeRequest: String?
     @State private var streamingText = ""
@@ -46,32 +48,45 @@ struct ClassChatView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
+        Group {
             if profiles.isEmpty {
-                noProvider
+                ScrollView {
+                    VStack(spacing: 0) {
+                        header
+                        Divider()
+                        noProvider
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             } else {
-                contextSummary
-                messageList
-                if sending { generationBanner }
-                composer
+                VStack(spacing: 0) {
+                    header
+                    Divider()
+                    contextSummary
+                    messageList
+                    if sending { generationBanner }
+                    composer
+                }
             }
         }
         .background(WorkspacePalette.canvas)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             refreshProfiles()
-            refreshContext()
         }
         .onChange(of: model.rootURL) { _, _ in
             refreshProfiles()
-            refreshContext()
+            if context != nil { scheduleContextRefresh() }
         }
         .onChange(of: model.state.revision) { _, _ in
-            guard !sending else { return }
-            refreshContext()
+            guard !sending, context != nil else { return }
+            scheduleContextRefresh()
         }
-        .onDisappear { cancelGeneration() }
+        .onDisappear {
+            profileTask?.cancel()
+            contextTask?.cancel()
+            cancelGeneration()
+        }
     }
 
     private var header: some View {
@@ -141,7 +156,7 @@ struct ClassChatView: View {
             }
         }
         .padding(20)
-        .frame(maxWidth: 920, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: 920, alignment: .topLeading)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -153,7 +168,7 @@ struct ClassChatView: View {
                     .foregroundStyle(WorkspacePalette.ink)
                 Spacer(minLength: 8)
                 if loadingContext { ProgressView().controlSize(.small) }
-                Button("Refresh", systemImage: "arrow.clockwise") { refreshContext() }
+                Button("Refresh", systemImage: "arrow.clockwise") { scheduleContextRefresh() }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
                     .help("Refresh the class context")
@@ -176,8 +191,10 @@ struct ClassChatView: View {
                     .foregroundStyle(WorkspacePalette.muted)
             } else {
                 HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("LCP is preparing the current class context.")
+                    Image(systemName: loadingContext ? "hourglass" : "arrow.down.doc")
+                    Text(loadingContext
+                         ? "LCP is preparing the current class context."
+                         : "The current class context will be prepared when you refresh or send a message.")
                         .font(.caption)
                         .foregroundStyle(WorkspacePalette.muted)
                 }
@@ -318,13 +335,26 @@ struct ClassChatView: View {
             .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 12))
             .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(sending ? WorkspacePalette.accent : WorkspacePalette.line, lineWidth: sending ? 1.5 : 1) }
             HStack(alignment: .center, spacing: 10) {
-                Picker("Agent provider", selection: Binding(get: { selectedProfileID ?? profiles.first?.id }, set: { selectedProfileID = $0 })) {
-                    ForEach(profiles.filter(\.enabled)) { profile in
-                        Text("\(profile.name) · \(profile.model)").tag(Optional(profile.id))
+                Menu {
+                    ForEach(profiles) { profile in
+                        Button {
+                            selectedProfileID = profile.id
+                        } label: {
+                            HStack {
+                                Text(profile.name)
+                                Spacer()
+                                Text(profile.model)
+                                    .foregroundStyle(WorkspacePalette.muted)
+                            }
+                        }
                     }
+                } label: {
+                    Label(selectedProfile.map { "\($0.name) · \($0.model)" } ?? "Choose an agent",
+                          systemImage: "sparkles")
+                        .lineLimit(1)
                 }
-                .labelsHidden()
-                .frame(maxWidth: 280)
+                .menuStyle(.borderlessButton)
+                .frame(maxWidth: 280, alignment: .leading)
                 .accessibilityLabel("Agent provider")
                 if let status {
                     Label(status, systemImage: "exclamationmark.circle")
@@ -361,15 +391,25 @@ struct ClassChatView: View {
     }
 
     private func refreshProfiles() {
-        do {
-            profiles = try credentials.profilesList().filter(\.enabled)
-            if selectedProfileID == nil || !profiles.contains(where: { $0.id == selectedProfileID }) {
-                selectedProfileID = profiles.first?.id
+        profileTask?.cancel()
+        let credentials = credentials
+        profileTask = Task { @MainActor in
+            do {
+                let values = try await credentials.profilesListAsync().filter(\.enabled)
+                guard !Task.isCancelled else { return }
+                profiles = values
+                if selectedProfileID == nil || !profiles.contains(where: { $0.id == selectedProfileID }) {
+                    selectedProfileID = profiles.first?.id
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                status = error.localizedDescription
             }
-        } catch { status = error.localizedDescription }
+        }
     }
 
-    private func refreshContext() {
+    private func scheduleContextRefresh() {
+        contextTask?.cancel()
         guard let repository = model.repository else { return }
         let ids = activeClassIDs
         guard !ids.isEmpty else {
@@ -378,11 +418,25 @@ struct ClassChatView: View {
             return
         }
         loadingContext = true
-        do {
-            context = try ClassPlannerService(repository: repository).makeContext(classIDs: ids)
-            if !sending { status = nil }
-        } catch { status = error.localizedDescription }
-        loadingContext = false
+        contextTask = Task { @MainActor in
+            // Let SwiftUI commit the chat shell before payload validation and
+            // context assembly run on the main actor.
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            do {
+                let prepared = try ClassPlannerService(repository: repository).makeContext(classIDs: ids)
+                guard !Task.isCancelled else { return }
+                context = prepared
+                if !sending { status = nil }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                status = error.localizedDescription
+            }
+            loadingContext = false
+            contextTask = nil
+        }
     }
 
     private func send() {
@@ -397,10 +451,6 @@ struct ClassChatView: View {
             status = "Keep each chat message under 4,096 bytes."
             return
         }
-        let key: String
-        do { key = try credentials.apiKey(for: profile) }
-        catch { status = error.localizedDescription; return }
-
         let history = thread?.messages ?? []
         let generationID = UUID()
         activeGenerationID = generationID
@@ -432,6 +482,8 @@ struct ClassChatView: View {
                 // Let SwiftUI render the preparing state before the bounded
                 // context snapshot starts on the main actor.
                 await Task.yield()
+                try Task.checkCancellation()
+                let key = try await credentials.apiKeyAsync(for: profile)
                 try Task.checkCancellation()
                 let result = try await ClassPlannerService(repository: repository).generateChatStream(
                     classIDs: ids, history: history, message: request, profile: profile, apiKey: key,

@@ -18,6 +18,18 @@ enum UniversityConnectionStatus: Equatable {
         } catch { return .unavailable }
     }
 
+    @MainActor static func readAsync(_ service: UniversitySource, credentials: UniversityCredentials) async -> Self {
+        do {
+            if let kind = service.googleKind {
+                guard try await credentials.hasGoogleClientAsync() else { return .needsClient }
+                guard try await credentials.isGoogleConnectedAsync(kind) else { return .disconnected }
+            } else if service == .canvas {
+                guard try await credentials.hasCanvasTokenAsync() else { return .disconnected }
+            } else { return .manual }
+            return credentials.lastCheck(for: service) ?? .saved
+        } catch { return .unavailable }
+    }
+
     var label: String {
         switch self {
         case .unavailable: "Keychain unavailable"
@@ -54,6 +66,7 @@ struct UniversityConnectionManager: View {
     @State private var working: String?
     @State private var operation: Task<Void, Never>?
     @State private var operationID: UUID?
+    @State private var refreshTask: Task<Void, Never>?
 
     private var credentials: UniversityCredentials { .forLibrary(model.rootURL) }
 
@@ -154,25 +167,38 @@ struct UniversityConnectionManager: View {
         .padding(24)
         .fixedSize(horizontal: false, vertical: true)
         .onAppear { refresh() }
-        .onDisappear { cancel(); token = "" }
+        .onDisappear { cancel(); refreshTask?.cancel(); token = "" }
         .onChange(of: model.rootURL) { _, _ in cancel(); dismiss() }
         .fileImporter(isPresented: $choosingClient, allowedContentTypes: [.json]) { result in
-            do {
-                let file = try result.get()
-                try credentials.configureGoogle(from: file)
+            let file: URL
+            do { file = try result.get() }
+            catch CocoaError.userCancelled { return }
+            catch { feedback = error.localizedDescription; return }
+            run("Saving Google client…") {
+                try await credentials.configureGoogleAsync(from: file)
                 feedback = nil
-            } catch CocoaError.userCancelled { return }
-            catch { feedback = error.localizedDescription }
-            refresh()
-            onChange()
+            }
         }
     }
 
     private func refresh() {
-        status = .read(service, credentials: credentials)
-        if service == .drive, status.isConfigured {
-            do { folderCreationEnabled = try credentials.canCreateDriveFolders() }
-            catch { status = .unavailable }
+        refreshTask?.cancel()
+        let service = service
+        let credentials = credentials
+        refreshTask = Task { @MainActor in
+            let nextStatus = await UniversityConnectionStatus.readAsync(service, credentials: credentials)
+            guard !Task.isCancelled else { return }
+            status = nextStatus
+            if service == .drive, nextStatus.isConfigured {
+                do { folderCreationEnabled = try await credentials.canCreateDriveFoldersAsync() }
+                catch {
+                    guard !Task.isCancelled else { return }
+                    status = .unavailable
+                }
+            } else {
+                folderCreationEnabled = false
+            }
+            refreshTask = nil
         }
     }
 
@@ -184,13 +210,11 @@ struct UniversityConnectionManager: View {
     }
 
     private func disconnect() {
-        do {
-            if let kind = service.googleKind { try credentials.disconnectGoogle(kind) }
-            else { try credentials.removeCanvasToken() }
+        run("Disconnecting…") {
+            if let kind = service.googleKind { try await credentials.disconnectGoogleAsync(kind) }
+            else { try await credentials.removeCanvasTokenAsync() }
             feedback = nil
-        } catch { feedback = error.localizedDescription }
-        refresh()
-        onChange()
+        }
     }
 
     private func run(_ activity: String, perform: @escaping @MainActor () async throws -> Void) {

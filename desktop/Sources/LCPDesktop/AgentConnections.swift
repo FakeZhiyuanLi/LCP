@@ -7,6 +7,8 @@ struct AgentConnectionsView: View {
     @ObservedObject var model: WorkspaceModel
     @State private var providerProfiles: [AgentProviderProfile] = []
     @State private var providerError: String?
+    @State private var providerLoading = false
+    @State private var providerTask: Task<Void, Never>?
 
     private var providerCredentials: AgentProviderCredentials {
         AgentProviderCredentials.forLibrary(model.rootURL)
@@ -24,7 +26,11 @@ struct AgentConnectionsView: View {
                         .buttonStyle(.bordered)
                     Spacer()
                 }
-                if !providerProfiles.isEmpty {
+                if providerLoading {
+                    Label("Checking the Mac Keychain…", systemImage: "lock")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else if !providerProfiles.isEmpty {
                     GroupBox("Bring your own provider") {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Provider keys stay in the Mac Keychain. LCP sends only the small connection check until you explicitly use a provider with class context.")
@@ -66,14 +72,32 @@ struct AgentConnectionsView: View {
         }.navigationTitle("Agent Connections")
             .onAppear(perform: refreshProviderProfiles)
             .onChange(of: model.rootURL) { _, _ in refreshProviderProfiles() }
+            .onDisappear { providerTask?.cancel() }
             .alert("Provider Connections Unavailable", isPresented: Binding(get: { providerError != nil }, set: { if !$0 { providerError = nil } })) {
                 Button("OK") { providerError = nil }
             } message: { Text(providerError ?? "") }
     }
 
     private func refreshProviderProfiles() {
-        do { providerProfiles = try providerCredentials.profilesList() }
-        catch { providerError = error.localizedDescription }
+        providerTask?.cancel()
+        providerLoading = true
+        providerError = nil
+        let credentials = providerCredentials
+        providerTask = Task { @MainActor in
+            defer {
+                providerLoading = false
+                providerTask = nil
+            }
+            do {
+                let values = try await credentials.profilesListAsync().filter(\.enabled)
+                guard !Task.isCancelled else { return }
+                providerProfiles = values
+            } catch {
+                guard !Task.isCancelled else { return }
+                providerProfiles = []
+                providerError = error.localizedDescription
+            }
+        }
     }
 }
 
@@ -82,6 +106,7 @@ private struct BYOKProviderCard: View {
     let credentials: AgentProviderCredentials
     let onChanged: () -> Void
     @State private var testing = false
+    @State private var removing = false
     @State private var status: String?
     @State private var confirmRemove = false
 
@@ -98,8 +123,8 @@ private struct BYOKProviderCard: View {
             HStack(spacing: 10) {
                 Button(testing ? "Testing…" : "Test Connection") { test() }
                     .disabled(testing || !profile.enabled)
-                Button("Remove…", role: .destructive) { confirmRemove = true }
-                    .disabled(testing)
+                Button(removing ? "Removing…" : "Remove…", role: .destructive) { confirmRemove = true }
+                    .disabled(testing || removing)
                 if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
             }
         }
@@ -125,7 +150,7 @@ private struct BYOKProviderCard: View {
         Task { @MainActor in
             defer { testing = false }
             do {
-                let key = try credentials.apiKey(for: profile)
+                let key = try await credentials.apiKeyAsync(for: profile)
                 let result = try await OpenAICompatibleAgentClient(profile: profile, apiKey: key).checkConnection()
                 _ = result
                 status = "Verified just now"
@@ -136,10 +161,16 @@ private struct BYOKProviderCard: View {
     }
 
     private func remove() {
-        do {
-            try credentials.remove(profile: profile)
-            onChanged()
-        } catch { status = error.localizedDescription }
+        guard !removing else { return }
+        removing = true
+        status = nil
+        Task { @MainActor in
+            defer { removing = false }
+            do {
+                try await credentials.removeAsync(profile: profile)
+                onChanged()
+            } catch { status = error.localizedDescription }
+        }
     }
 }
 
@@ -219,7 +250,7 @@ struct NewBYOKProviderView: View {
                 let client = try OpenAICompatibleAgentClient(profile: nextProfile, apiKey: nextKey)
                 let result = try await client.checkConnection()
                 if saveAfter {
-                    try credentials.save(profile: nextProfile, apiKey: nextKey)
+                    try await credentials.saveAsync(profile: nextProfile, apiKey: nextKey)
                     model.notice = "BYOK provider connected. Its API key is stored in the Mac Keychain."
                     dismiss()
                 } else {
