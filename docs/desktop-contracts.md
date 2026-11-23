@@ -46,6 +46,30 @@ stays in the planner until review. Saving it creates an attributed `agent_plan`
 activity with source-level citations and an input-context manifest. The planner
 does not write university services or official class records.
 
+## Agent presentation
+
+`AgentDisplayTool` defines the name, schema and validator for each display tool.
+The stdio MCP bridge and OpenAI-compatible Responses client share that registry.
+A display call formats its supplied values locally. Writing external agent output
+to a class uses the existing scoped proposal and acceptance flow.
+
+`AgentVisual` serializes a validated figure inside a fenced `lcp-visual` Markdown
+block with integer `version` 1, a `tool` name, a `title`, and up to 16 `items`.
+Bar charts require a shared `unit` and a finite, non-negative `value` per label.
+Timelines retain the supplied order and require a `label` and `detail` per step.
+Chats, activity revisions, and backups keep that Markdown alongside the prose.
+The native renderer validates stored figures on read. It presents unknown block
+versions as selectable code. Web links and validated LCP citation links open
+on a student's click.
+
+To add a display feature, extend the registry with its schema and validator,
+extend the native visual view, and test the same inputs through both the bridge
+and the Responses client. Preserve decoding of existing versioned figures.
+The provider can issue up to four terminal display calls per answer.
+Functions that need a result returned to the model require a separate
+continuation and authorization design.
+
+
 ## Capture
 
 Local class capture uses the academic enrollment UUID and stores audio in the

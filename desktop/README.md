@@ -278,6 +278,30 @@ Agent-proposed notes and study logs require review. Acceptance preserves agent
 identity, immutable citations and history. An agent cannot silently edit original
 materials, official deadlines, grades, recording destinations or capture state.
 
+### Formatted agent answers and graphics
+
+The study planner, University Chat, and class chats render Markdown headings,
+emphasis, lists, tables, code, and source links. Ask “Show a timeline for
+reviewing these topics” or “Compare my estimated study minutes in a bar chart.”
+Saved agent plans, chat replies, and reviewed proposals retain their graphics.
+
+External agents connect using **Agent Connections → MCP JSON**. With an active
+read grant, `tools/list` advertises `render_bar_chart` and `render_timeline`.
+Call a display tool with the values you want the student to see. For example,
+this call compares two fictional estimates.
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"render_bar_chart","arguments":{"title":"Estimated study time","unit":"minutes","items":[{"label":"Reading","value":20},{"label":"Practice","value":35}]}}}
+```
+
+The result contains `markdown` and a versioned `visual` object. To show it in
+LCP, include the returned Markdown in the body of `propose_note` or
+`propose_study_log` using a grant with that capability. The student previews it
+in **Review Proposals** and can accept it into class history. Built-in providers
+can call the same tools directly while answering. Their completed calls render
+beneath the answer, including when the provider replies with just a graphic.
+
+
 ## Lecture feed and capture
 
 Every academic class can record locally, including name-only classes. In **Capture**, choose the class and its **On this Mac** destination. Finalized audio is stored in the library’s `Recordings` folder and appears under that class’s **Lectures** tab. Select a catalog destination and save its mapping to send future recordings through the server processing workflow.

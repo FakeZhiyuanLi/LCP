@@ -11,6 +11,8 @@ struct ProviderStreamParser {
         case created = "response.created", inProgress = "response.in_progress"
         case textDelta = "response.output_text.delta", textDone = "response.output_text.done"
         case refusalDelta = "response.refusal.delta", refusalDone = "response.refusal.done"
+        case itemAdded = "response.output_item.added", itemDone = "response.output_item.done"
+        case argumentsDelta = "response.function_call_arguments.delta", argumentsDone = "response.function_call_arguments.done"
         case completed = "response.completed", incomplete = "response.incomplete", failed = "response.failed"
     }
 
@@ -29,6 +31,7 @@ struct ProviderStreamParser {
     private var completed = false
     private var text = ""
     private var finalParts: [String] = []
+    private var displays = ProviderDisplayCalls()
     private var requestID: String?
     private var usage: TokenUsage?
     let onUpdate: @Sendable (AgentProviderStreamUpdate) -> Void
@@ -105,6 +108,12 @@ struct ProviderStreamParser {
         if let counts = OpenAICompatibleAgentClient.usage(from: response["usage"] as? [String: Any]) { usage = counts }
         try OpenAICompatibleAgentClient.checkStatus(response)
         switch type {
+        case .itemAdded, .itemDone:
+            if let item = object["item"] as? [String: Any], let index = object["output_index"] as? Int {
+                displays.item(item, index: index, complete: type == .itemDone)
+            }
+        case .argumentsDelta, .argumentsDone:
+            displays.arguments(object, complete: type == .argumentsDone)
         case .error, .failed: throw AgentProviderError.response(.providerFailure)
         case .incomplete: throw OpenAICompatibleAgentClient.incompleteResponse(response)
         case .textDelta, .refusalDelta:
@@ -114,6 +123,7 @@ struct ProviderStreamParser {
             if let value = (object["text"] ?? object["refusal"]) as? String { finalParts.append(value) }
         case .completed, .json:
             completed = true
+            displays.response(response)
             if text.isEmpty, let final = OpenAICompatibleAgentClient.responseText(from: response) { try append(final) }
         case .none:
             // Some compatible gateways emit data-only chat-completion chunks.
@@ -145,6 +155,8 @@ struct ProviderStreamParser {
             throw AgentProviderError.response(events == 0 ? .unexpectedFormat : .incomplete)
         }
         if text.isEmpty, !finalParts.isEmpty { try append(finalParts.joined(separator: "\n\n")) }
+        let graphics = displays.markdown()
+        if !graphics.isEmpty { try append((text.isEmpty ? "" : "\n\n") + graphics) }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentProviderError.response(.noText) }
         onUpdate(AgentProviderStreamUpdate(text: text, requestID: requestID, usage: usage, finished: true))
         return AgentProviderGenerationResult(text: text, requestID: requestID, usage: usage)

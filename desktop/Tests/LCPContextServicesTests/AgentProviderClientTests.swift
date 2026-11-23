@@ -12,6 +12,8 @@ final class AgentProviderFixtureProtocol: URLProtocol, @unchecked Sendable {
     static var authorization: String?
     static var timeoutInterval: TimeInterval?
     static var simulateTimeout: AgentTimeoutPhase?
+    static var rejectedToolParameter: String?
+    static var generationRequests = 0
     static let partialReplyTimeout = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -23,6 +25,16 @@ final class AgentProviderFixtureProtocol: URLProtocol, @unchecked Sendable {
         if let body,
            let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
             Self.requestBody = object
+        }
+        Self.generationRequests += 1
+        if let param = Self.rejectedToolParameter, Self.requestBody["tools"] != nil {
+            let response = HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            let body = try! JSONSerialization.data(withJSONObject: ["error": ["param": param, "message": "Unsupported parameter"]])
+            client?.urlProtocol(self, didLoad: body)
+            client?.urlProtocolDidFinishLoading(self)
+            return
         }
         if Self.simulateTimeout == .beforeHeaders {
             client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
@@ -99,6 +111,8 @@ final class AgentProviderClientTests: XCTestCase {
         AgentProviderFixtureProtocol.authorization = nil
         AgentProviderFixtureProtocol.timeoutInterval = nil
         AgentProviderFixtureProtocol.simulateTimeout = nil
+        AgentProviderFixtureProtocol.rejectedToolParameter = nil
+        AgentProviderFixtureProtocol.generationRequests = 0
         AgentProviderFixtureProtocol.partialReplyTimeout.withLock { $0 = nil }
     }
 
@@ -206,6 +220,85 @@ final class AgentProviderClientTests: XCTestCase {
             XCTAssertEqual(error, .timeout(.beforeBody))
         }
     }
+
+    func testBufferedAndStreamedDisplayToolOutputUsesSharedSchemaAndOneGraphic() async throws {
+        let provider = try client()
+        let arguments = #"{"title":"Reading time","unit":"min","items":[{"label":"Chapter One","value":12}]}"#
+        let item: [String: Any] = ["type": "function_call", "id": "fc_test", "call_id": "call_test",
+                                   "name": "render_bar_chart", "arguments": arguments]
+        let finished: [String: Any] = ["id": "resp_display", "output_text": "## Review",
+                                       "output": [item], "usage": ["total_tokens": 23]]
+        AgentProviderFixtureProtocol.response = finished
+        let buffered = try await provider.generate(prompt: "Fictional chart")
+        let tools = try XCTUnwrap(AgentProviderFixtureProtocol.requestBody["tools"] as? [[String: Any]])
+        XCTAssertEqual(Set(tools.compactMap { $0["name"] as? String }), Set(AgentDisplayTool.allCases.map(\.rawValue)))
+        let expected = try AgentDisplayTool.barChart.render(arguments: Data(arguments.utf8)).markdown()
+        XCTAssertEqual(buffered.text, "## Review\n\n" + expected)
+
+        func sse(_ events: [[String: Any]]) throws -> Data {
+            Data(try events.map { event in
+                "data: " + String(decoding: try JSONSerialization.data(withJSONObject: event), as: UTF8.self) + "\n\n"
+            }.joined().utf8)
+        }
+        var added = item; added["arguments"] = ""
+        let split = arguments.index(arguments.startIndex, offsetBy: 10)
+        let stream: [[String: Any]] = [
+            ["type": "response.output_text.delta", "delta": "## Review"],
+            ["type": "response.output_item.added", "output_index": 0, "item": added],
+            ["type": "response.function_call_arguments.delta", "item_id": "fc_test", "delta": String(arguments[..<split])],
+            ["type": "response.function_call_arguments.delta", "output_index": 0, "delta": String(arguments[split...])],
+        ]
+        AgentProviderFixtureProtocol.streamBody = try sse(stream + [["type": "response.completed", "response": ["id": "resp_display"]]])
+        let deltasOnly = try await provider.generateStream(prompt: "Fictional chart") { _ in }
+        XCTAssertEqual(deltasOnly.text, buffered.text)
+        AgentProviderFixtureProtocol.streamBody = try sse(stream + [
+            ["type": "response.function_call_arguments.done", "output_index": 0, "arguments": arguments],
+            ["type": "response.output_item.done", "output_index": 0, "item": item],
+            ["type": "response.completed", "response": finished]
+        ])
+        let repeated = try await provider.generateStream(prompt: "Fictional chart") { _ in }
+        XCTAssertEqual(repeated, buffered)
+        AgentProviderFixtureProtocol.response = ["output": [item]]
+        let graphicOnly = try await provider.generate(prompt: "Just a chart")
+        XCTAssertEqual(graphicOnly.text, expected)
+    }
+
+    func testInvalidToolInputsKeepProseAndCannotDispatchOtherFunctions() async throws {
+        let provider = try client()
+        for item in [
+            ["type": "function_call", "name": "unknown_tool", "arguments": "{}"],
+            ["type": "function_call", "name": "render_timeline", "arguments": #"{"title":"Bad","items":[]}"#]
+        ] {
+            AgentProviderFixtureProtocol.response = ["output_text": "A readable answer.", "output": [item]]
+            let reply = try await provider.generate(prompt: "Fictional plan")
+            XCTAssertTrue(reply.text.hasPrefix("A readable answer."))
+            XCTAssertFalse(reply.text.contains("lcp-visual"))
+        }
+        for input in [
+            #"{"title":"T","unit":"min","items":[{"label":"L","value":true}]}"#,
+            #"{"title":"T","unit":"min","items":[{"label":"L","value":-1}]}"#,
+            #"{"title":"T","unit":"min","items":[{"label":"L","value":1,"path":"/example"}]}"#
+        ] {
+            XCTAssertThrowsError(try AgentDisplayTool.barChart.render(arguments: Data(input.utf8)))
+        }
+    }
+
+    func testPlainMarkdownFallbackOnlyForRejectedDisplayTools() async throws {
+        let provider = try client()
+        AgentProviderFixtureProtocol.response = ["output_text": "**Review**"]
+        AgentProviderFixtureProtocol.rejectedToolParameter = "tools"
+        let result = try await provider.generateStream(prompt: "Fictional plan") { _ in }
+        XCTAssertEqual(result.text, "**Review**")
+        XCTAssertEqual(AgentProviderFixtureProtocol.generationRequests, 2)
+        XCTAssertNil(AgentProviderFixtureProtocol.requestBody["tools"])
+        AgentProviderFixtureProtocol.rejectedToolParameter = "model"
+        do {
+            _ = try await provider.generate(prompt: "Fictional plan")
+            XCTFail("Expected the original HTTP rejection")
+        } catch let error as AgentProviderError { XCTAssertEqual(error, .http(400)) }
+        XCTAssertEqual(AgentProviderFixtureProtocol.generationRequests, 3)
+    }
+
 
     func testStreamingGenerationSendsStreamFlagAndReportsDeltasAndUsage() async throws {
         AgentProviderFixtureProtocol.streamBody = Data(#"""

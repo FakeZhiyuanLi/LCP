@@ -12,7 +12,12 @@ struct ClassPlannerView: View {
     @State private var selectedClassIDs: Set<UUID> = []
     @State private var objective = "Help me plan what to do next for this class. Prioritize urgent coursework and the highest-value review."
     @State private var context: ClassPlannerContext?
-    @State private var plan: String?
+    private struct GeneratedPlan {
+        let result: ClassPlanResult
+        let objective: String
+        let profile: AgentProviderProfile
+    }
+    @State private var plan: GeneratedPlan?
     @State private var generating = false
     @State private var loadingContext = false
     @State private var status: String?
@@ -68,6 +73,7 @@ struct ClassPlannerView: View {
             refreshProfiles()
         }
         .onChange(of: model.rootURL) { _, _ in
+            plan = nil
             refreshProfiles()
             if context != nil { refreshContext() }
         }
@@ -245,30 +251,26 @@ struct ClassPlannerView: View {
         .background(WorkspacePalette.tintSurface, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    private func resultCard(_ plan: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private func resultCard(_ plan: GeneratedPlan) -> some View {
+        let result = plan.result
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("Generated plan", systemImage: "checklist")
                     .font(.headline)
                 Spacer()
                 Button(globalScope ? "Save to Class Histories" : "Save to Class History") {
-                    guard let context, let profile = selectedProfile else { return }
-                    model.saveAgentPlan(classIDs: context.classIDs, objective: objective, plan: plan, profile: profile, context: context)
+                    model.saveAgentPlan(classIDs: result.context.classIDs, objective: plan.objective,
+                                        plan: result.response.text, profile: plan.profile, context: result.context)
                 }
                 .buttonStyle(.borderedProminent)
             }
-            Text(plan)
-                .font(.body)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if let context {
-                DisclosureGroup("Sources supplied to the agent · \(context.sourceCitations.count)") {
-                    ForEach(context.sourceCitations) { citation in
-                        Text(citation.label.isEmpty ? citation.sourceKind.capitalized : citation.label)
-                            .font(.caption)
-                            .foregroundStyle(WorkspacePalette.muted)
-                            .textSelection(.enabled)
-                    }
+            AgentOutputView(source: result.response.text)
+            DisclosureGroup("Sources supplied to the agent · \(result.context.sourceCitations.count)") {
+                ForEach(result.context.sourceCitations) { citation in
+                    Text(citation.label.isEmpty ? citation.sourceKind.capitalized : citation.label)
+                        .font(.caption)
+                        .foregroundStyle(WorkspacePalette.muted)
+                        .textSelection(.enabled)
                 }
             }
             Text("Review the answer before saving. Saving creates an attributed, citation-backed history entry and does not edit Canvas or other university services.")
@@ -331,8 +333,9 @@ struct ClassPlannerView: View {
                 let key = try await credentials.apiKeyAsync(for: profile)
                 let result = try await ClassPlannerService(repository: repository).generate(
                     classIDs: requestedClassIDs, objective: request, profile: profile, apiKey: key)
+                guard model.repository === repository else { return }
                 context = result.context
-                plan = result.response.text
+                plan = GeneratedPlan(result: result, objective: request, profile: profile)
             } catch is CancellationError {
                 status = "The planning request was cancelled."
             } catch {

@@ -1,4 +1,5 @@
 import Foundation
+import LCPContextServices
 
 /// Deliberately narrow tools. There are no capture, deadline, grade, network or
 /// transcription controls, nor a tool for accepting a proposal.
@@ -22,6 +23,19 @@ enum BridgeTools {
     private static var proposalFields: [String:JSONValue] {
         ["class_id":uuid,"title":text,"body":text,"idempotency_key":text,"target_id":uuid,
          "expected_version":integer(1,1000000000),"citations":.object(["type":.string("array"),"items":citation,"maxItems":.number(32)])]
+    }
+
+    static func displayDefinitions() throws -> [JSONValue] {
+        try AgentDisplayTool.allCases.map { display in
+            let schema = try JSONSerialization.data(withJSONObject: display.inputSchema)
+            return .object([
+                "name": .string(display.rawValue),
+                "description": .string(display.guidance + " Returns markdown you can include verbatim in a reviewed LCP note or study log."),
+                "inputSchema": try JSONDecoder().decode(JSONValue.self, from: schema),
+                "annotations": .object(["readOnlyHint": .bool(true), "destructiveHint": .bool(false),
+                                        "idempotentHint": .bool(true), "openWorldHint": .bool(false)])
+            ])
+        }
     }
     private static func integer(_ low:Int,_ high:Int)->JSONValue {
         .object(["type":.string("integer"),"minimum":.number(Double(low)),"maximum":.number(Double(high))])

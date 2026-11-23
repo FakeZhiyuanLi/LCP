@@ -98,7 +98,7 @@ public struct UniversityHTTP: Sendable {
     }
 
     func postProviderJSON(_ url: URL, body: Data, bearer: String, host: String, stream: Bool,
-                          limit: Int, diagnostics: AgentRequestDiagnostics) throws -> AsyncThrowingStream<Data, Error> {
+                          limit: Int, diagnostics: AgentRequestDiagnostics, displayTools: Bool = false) throws -> AsyncThrowingStream<Data, Error> {
         try Task.checkCancellation()
         guard limit > 0, Self.allows(url, hosts: [host]), !bearer.isEmpty,
               bearer.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil else {
@@ -117,7 +117,7 @@ public struct UniversityHTTP: Sendable {
         diagnostics.sending(bodyBytes: body.count, idle: request.timeoutInterval, total: config.timeoutIntervalForResource)
         return AsyncThrowingStream { continuation in
             let delegate = ProviderHTTPResponse(allowedHosts: [host], limit: limit,
-                                                continuation: continuation, diagnostics: diagnostics)
+                                                continuation: continuation, diagnostics: diagnostics, displayTools: displayTools)
             let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
             let task = session.dataTask(with: request)
             continuation.onTermination = { @Sendable _ in session.invalidateAndCancel() }
@@ -231,6 +231,8 @@ final class UniversityResponse: NSObject, URLSessionDataDelegate, @unchecked Sen
     }
 }
 
+struct UnsupportedDisplayTools: Error {}
+
 /// A provider POST uses the same bounded transport for JSON and event streams.
 private final class ProviderHTTPResponse: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let allowedHosts: Set<String>
@@ -238,13 +240,17 @@ private final class ProviderHTTPResponse: NSObject, URLSessionDataDelegate, @unc
     private let continuation: AsyncThrowingStream<Data, Error>.Continuation
     private let diagnostics: AgentRequestDiagnostics
     private var received = 0
+    private let displayTools: Bool
+    private var rejectedStatus: Int?
+    private var rejectionBody = Data()
 
     init(allowedHosts: Set<String>, limit: Int, continuation: AsyncThrowingStream<Data, Error>.Continuation,
-         diagnostics: AgentRequestDiagnostics) {
+         diagnostics: AgentRequestDiagnostics, displayTools: Bool) {
         self.allowedHosts = allowedHosts
         self.limit = limit
         self.continuation = continuation
         self.diagnostics = diagnostics
+        self.displayTools = displayTools
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -262,6 +268,11 @@ private final class ProviderHTTPResponse: NSObject, URLSessionDataDelegate, @unc
             return
         }
         diagnostics.received(http)
+        if displayTools, [400, 422].contains(http.statusCode), http.expectedContentLength <= 8_192 {
+            rejectedStatus = http.statusCode
+            completionHandler(.allow)
+            return
+        }
         guard (200..<300).contains(http.statusCode) else {
             continuation.finish(throwing: UniversityServiceError.http(http.statusCode))
             completionHandler(.cancel)
@@ -276,6 +287,15 @@ private final class ProviderHTTPResponse: NSObject, URLSessionDataDelegate, @unc
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
+        if let rejectedStatus {
+            guard chunk.count <= 8_192 - rejectionBody.count else {
+                continuation.finish(throwing: UniversityServiceError.http(rejectedStatus))
+                dataTask.cancel()
+                return
+            }
+            rejectionBody.append(chunk)
+            return
+        }
         guard received <= limit - chunk.count else {
             continuation.finish(throwing: URLError(.dataLengthExceedsMaximum))
             dataTask.cancel()
@@ -291,7 +311,17 @@ private final class ProviderHTTPResponse: NSObject, URLSessionDataDelegate, @unc
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error { continuation.finish(throwing: error) }
+        if let rejectedStatus {
+            let object = try? JSONSerialization.jsonObject(with: rejectionBody) as? [String: Any]
+            let details = object?["error"] as? [String: Any]
+            let param = details?["param"] as? String
+            let message = (details?["message"] as? String)?.lowercased() ?? ""
+            let namesTools = message.contains("tools") || message.contains("function calling")
+            let unsupported = ["not supported", "unsupported", "does not support", "unknown parameter", "unrecognized"].contains { message.contains($0) }
+            if error == nil, param == "tools" || (namesTools && unsupported) {
+                continuation.finish(throwing: UnsupportedDisplayTools())
+            } else { continuation.finish(throwing: UniversityServiceError.http(rejectedStatus)) }
+        } else if let error { continuation.finish(throwing: error) }
         else { continuation.finish() }
     }
 }

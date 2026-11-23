@@ -387,7 +387,9 @@ struct ActivityHistoryView: View {
                             Button("Correct") { editing = entry }.accessibilityLabel("Correct history entry \(entry.title), revision \(entry.version)")
                         }
                         Text(entry.title).font(.headline)
-                        Text(entry.body).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        if entry.agentIdentity != nil || entry.kind == "agent_artifact" {
+                            AgentOutputView(source: entry.body)
+                        } else { Text(verbatim: entry.body).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                         if !entry.citations.isEmpty {
                             FlowCitationLinks(citations: entry.citations, open: { model.presentedCitation = $0 })
                         }
@@ -405,7 +407,9 @@ struct ActivityHistoryView: View {
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text("Revision \(revision.version) · \(revision.recordedAt.formatted())").font(.caption.bold())
                                     Text(revision.title).font(.subheadline)
-                                    Text(revision.body).font(.caption).textSelection(.enabled)
+                                    if revision.agentIdentity != nil || entry.kind == "agent_artifact" {
+                                        AgentOutputView(source: revision.body).font(.caption)
+                                    } else { Text(verbatim: revision.body).font(.caption).textSelection(.enabled) }
                                     if !revision.citations.isEmpty {
                                         Text("Sources cited in revision \(revision.version)").font(.caption.bold())
                                         FlowCitationLinks(citations: revision.citations, open: { model.presentedCitation = $0 })

@@ -225,9 +225,9 @@ public struct OpenAICompatibleAgentClient: Sendable {
     }
 
     private func jsonResponse(endpoint: URL, host: String, body: Data,
-                              diagnostics: AgentRequestDiagnostics) async throws -> [String: Any] {
+                              diagnostics: AgentRequestDiagnostics, displayTools: Bool = false) async throws -> [String: Any] {
         let chunks = try http.postProviderJSON(endpoint, body: body, bearer: apiKey, host: host,
-                                               stream: false, limit: 65_536, diagnostics: diagnostics)
+                                               stream: false, limit: 65_536, diagnostics: diagnostics, displayTools: displayTools)
         var data = Data()
         for try await chunk in chunks {
             try Task.checkCancellation()
@@ -259,12 +259,15 @@ public struct OpenAICompatibleAgentClient: Sendable {
         let diagnostics = AgentRequestDiagnostics()
         return try await diagnostics.run(.generate) {
             let (endpoint, host) = try destination()
-            let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maxOutputTokens)
-            let object = try await jsonResponse(endpoint: endpoint, host: host, body: body, diagnostics: diagnostics)
-            try Self.checkStatus(object)
-            guard let text = Self.responseText(from: object), !text.isEmpty else {
-                throw AgentProviderError.response(.noText)
+            let object = try await withGenerationBody(prompt: prompt, maximum: maxOutputTokens, stream: false) { body, tools in
+                try await jsonResponse(endpoint: endpoint, host: host, body: body, diagnostics: diagnostics, displayTools: tools)
             }
+            try Self.checkStatus(object)
+            var displays = ProviderDisplayCalls()
+            displays.response(object)
+            let parts = [Self.responseText(from: object) ?? "", displays.markdown()].filter { !$0.isEmpty }
+            let text = parts.joined(separator: "\n\n")
+            guard !text.isEmpty else { throw AgentProviderError.response(.noText) }
             return AgentProviderGenerationResult(text: text, requestID: object["id"] as? String,
                                                  usage: Self.usage(from: object["usage"] as? [String: Any]))
         }
@@ -275,17 +278,31 @@ public struct OpenAICompatibleAgentClient: Sendable {
                                onUpdate: @escaping @Sendable (AgentProviderStreamUpdate) -> Void) async throws -> AgentProviderGenerationResult {
         try await diagnostics.run(.stream) {
             let (endpoint, host) = try destination()
-            let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maxOutputTokens, stream: true)
-            let chunks = try http.postProviderJSON(endpoint, body: body, bearer: apiKey, host: host,
-                                                   stream: true, limit: ProviderStreamParser.byteLimit, diagnostics: diagnostics)
-            var parser = ProviderStreamParser(onUpdate: onUpdate)
-            defer { diagnostics.streamSummary(parser) }
-            for try await chunk in chunks {
+            return try await withGenerationBody(prompt: prompt, maximum: maxOutputTokens, stream: true) { body, tools in
+                let chunks = try http.postProviderJSON(endpoint, body: body, bearer: apiKey, host: host,
+                                                       stream: true, limit: ProviderStreamParser.byteLimit, diagnostics: diagnostics, displayTools: tools)
+                var parser = ProviderStreamParser(onUpdate: onUpdate)
+                defer { diagnostics.streamSummary(parser) }
+                for try await chunk in chunks {
+                    try Task.checkCancellation()
+                    try parser.consume(chunk)
+                }
                 try Task.checkCancellation()
-                try parser.consume(chunk)
+                return try parser.finish()
             }
+        }
+    }
+
+    private func withGenerationBody<T>(prompt: String, maximum: Int, stream: Bool,
+                                       send: (Data, Bool) async throws -> T) async throws -> T {
+        let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maximum,
+                                           stream: stream, displayTools: true)
+        do { return try await send(body, true) }
+        catch is UnsupportedDisplayTools {
+            // Some compatible gateways reject function declarations before beginning a response.
             try Task.checkCancellation()
-            return try parser.finish()
+            return try await send(Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maximum,
+                                                      stream: stream, displayTools: false), false)
         }
     }
 
@@ -315,20 +332,27 @@ public struct OpenAICompatibleAgentClient: Sendable {
     }
 
     static func generationBody(model: String, prompt: String, maxOutputTokens: Int) throws -> Data {
-        try generationBody(model: model, prompt: prompt, maxOutputTokens: maxOutputTokens, stream: false)
+        try generationBody(model: model, prompt: prompt, maxOutputTokens: maxOutputTokens, stream: false, displayTools: true)
     }
 
-    private static func generationBody(model: String, prompt: String, maxOutputTokens: Int, stream: Bool) throws -> Data {
+    private static func generationBody(model: String, prompt: String, maxOutputTokens: Int, stream: Bool, displayTools: Bool) throws -> Data {
         guard (1...4_096).contains(maxOutputTokens), prompt.utf8.count <= 3_000_000 else {
             throw AgentProviderError.inputTooLarge
         }
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "model": model,
             "input": prompt,
             "max_output_tokens": maxOutputTokens,
             "store": false,
             "stream": stream
         ]
+        if displayTools {
+            payload["tools"] = AgentDisplayTool.allCases.map { tool -> [String: Any] in
+                ["type": "function", "name": tool.rawValue, "description": tool.guidance,
+                 "parameters": tool.inputSchema, "strict": false]
+            }
+            payload["instructions"] = "Write readable Markdown. Use a display tool when a comparison or sequence would help the student. Use up to four visuals. Include explanations and citations in the same response. Each tool displays its graphic directly in LCP. Use known facts and clearly label estimates."
+        }
         guard JSONSerialization.isValidJSONObject(payload) else { throw AgentProviderError.invalidConfiguration }
         let data = try JSONSerialization.data(withJSONObject: payload, options: [])
         guard data.count <= 3_500_000 else { throw AgentProviderError.inputTooLarge }

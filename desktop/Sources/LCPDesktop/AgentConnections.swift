@@ -433,11 +433,14 @@ struct ProposalReviewView: View {
                             Spacer(); Text(proposal.state.capitalized).font(.caption).foregroundStyle(.secondary)
                         }
                         Text(proposal.title).font(.headline)
-                        Text(proposal.body).textSelection(.enabled)
+                        AgentOutputView(source: proposal.body)
                         if proposal.targetID != nil {
                             Text("Proposed correction · requires target version \(proposal.expectedVersion.map(String.init) ?? "unknown")").font(.caption).foregroundStyle(.orange)
                             if let target = model.state.activities.first(where: { $0.id == proposal.targetID }) {
-                                GroupBox("Current entry · version \(target.version)") { Text(target.body).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }
+                                GroupBox("Current entry · version \(target.version)") {
+                                    if target.agentIdentity != nil { AgentOutputView(source: target.body) }
+                                    else { Text(verbatim: target.body).textSelection(.enabled) }
+                                }
                             }
                         }
                         FlowCitationLinks(citations: proposal.citations, open: { model.presentedCitation = $0 })

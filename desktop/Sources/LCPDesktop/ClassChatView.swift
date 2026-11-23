@@ -547,9 +547,7 @@ private struct StreamingMessageBubble: View {
                         .foregroundStyle(WorkspacePalette.muted)
                 }
             } else {
-                Text(text + "▌")
-                    .font(.body)
-                    .textSelection(.enabled)
+                AgentOutputView(source: text)
             }
             if let requestID, !requestID.isEmpty {
                 Text("Request \(requestID)")
@@ -585,9 +583,11 @@ private struct ChatMessageBubble: View {
                         .foregroundStyle(WorkspacePalette.muted)
                 }
             }
-            Text(message.content)
-                .font(.body)
-                .textSelection(.enabled)
+            if message.role == .assistant {
+                AgentOutputView(source: message.content)
+            } else {
+                Text(verbatim: message.content).textSelection(.enabled)
+            }
             if !message.citations.isEmpty {
                 DisclosureGroup("Sources · \(message.citations.count)") {
                     FlowCitationLinks(citations: message.citations, open: openCitation)

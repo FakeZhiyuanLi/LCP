@@ -393,6 +393,48 @@ final class BridgeServerTests: XCTestCase {
         XCTAssertEqual(stillReadable.object?["total"], .number(1))
     }
 
+    @MainActor
+    func testDisplayToolsAreDiscoverableScopedAndRoundTripThroughReview() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let server = BridgeServer(repository: fixture.repository, grantID: fixture.grant.id)
+        _ = server.handle(request(1, "initialize", ["protocolVersion": .string("2025-11-25")]))
+        let list = server.handle(request(2, "tools/list"))?.object?["result"]?.object?["tools"]?.array ?? []
+        for tool in AgentDisplayTool.allCases {
+            let descriptor = try XCTUnwrap(list.first { $0.object?["name"] == .string(tool.rawValue) }?.object)
+            XCTAssertEqual(descriptor["annotations"]?.object?["readOnlyHint"], .bool(true))
+            let schema = try JSONSerialization.data(withJSONObject: tool.inputSchema)
+            XCTAssertEqual(descriptor["inputSchema"], try JSONDecoder().decode(JSONValue.self, from: schema))
+        }
+        let args: JSONValue = .object(["title": .string("Reading order"), "items": .array([
+            .object(["label": .string("Review"), "detail": .string("Read chapter one.")])
+        ])])
+        let render = request(3, "tools/call", ["name": .string("render_timeline"), "arguments": args])
+        let before = fixture.repository.state.revision
+        let response = try XCTUnwrap(server.handle(render))
+        let result = try resultText(response)
+        XCTAssertEqual(response.object?["result"]?.object?["structuredContent"], result)
+        XCTAssertEqual(fixture.repository.state.revision, before)
+        let markdown = try XCTUnwrap(result.object?["markdown"]?.string)
+        let proposal = request(4, "tools/call", ["name": .string("propose_note"), "arguments": .object([
+            "class_id": .string(fixture.classID.uuidString), "title": .string("Study sequence"),
+            "body": .string(markdown), "idempotency_key": .string("fictional-render-1")
+        ])])
+        XCTAssertEqual(server.handle(proposal)?.object?["result"]?.object?["isError"], .bool(true))
+        try fixture.repository.update { $0.connections[0].capabilities.append("propose_note") }
+        _ = try resultText(server.handle(proposal))
+        let draft = try XCTUnwrap(fixture.repository.state.proposals.first)
+        XCTAssertEqual(draft.body, markdown)
+        XCTAssertTrue(fixture.repository.state.activities.isEmpty)
+        let entry = try ProposalService(repository: fixture.repository).accept(draft.id)
+        XCTAssertEqual(entry.classID, fixture.classID)
+        XCTAssertEqual(entry.body, markdown)
+
+        try fixture.repository.update { $0.grants[0].revokedAt = Date() }
+        XCTAssertEqual(server.handle(render)?.object?["result"]?.object?["isError"], .bool(true))
+    }
+
+
     private func request(_ id:Int,_ method:String,_ params:[String:JSONValue]=[:])->JSONValue {
         .object(["jsonrpc":.string("2.0"),"id":.number(Double(id)),"method":.string(method),"params":.object(params)])
     }

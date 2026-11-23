@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import LCPContextServices
 
 /// Bounded local metadata only. No query, excerpt, answer, source text, path or
 /// caller-controlled request identifier is recorded or exported in backups.
@@ -25,7 +26,8 @@ struct BridgeAudit {
                   (info.fileSize ?? Int.max) <= 524_288 else { throw BridgeFailure("The local access audit is invalid.") }
             events = try JSONDecoder().decode([Event].self, from: Data(contentsOf: file))
         }
-        events.append(Event(at: Date(), grant: grant, tool: known.contains(tool) ? tool : "unknown", outcome: outcome))
+        let recognized = known.contains(tool) || AgentDisplayTool(rawValue: tool) != nil
+        events.append(Event(at: Date(), grant: grant, tool: recognized ? tool : "unknown", outcome: outcome))
         // Keep the latest 2,048 access facts. This is operational retention,
         // separate from permanent reviewed class/activity history.
         events = Array(events.suffix(2_048))
