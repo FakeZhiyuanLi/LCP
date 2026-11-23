@@ -575,6 +575,7 @@ struct ClassContextView: View {
         .navigationTitle(enrollment.shortLabel)
         .onAppear {
             activatePlannerIfRequested()
+            activateChatIfRequested()
         }
         .onChange(of: model.plannerClassID) { _, _ in
             activatePlannerIfRequested()
