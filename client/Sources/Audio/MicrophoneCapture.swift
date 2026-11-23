@@ -1,18 +1,18 @@
 import AVFoundation
 
-struct MicrophoneDevice: Identifiable, Equatable {
-    let id: String
-    let name: String
+public struct MicrophoneDevice: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let name: String
 }
 
-struct AudioLevels {
-    let averageDBFS: Float
-    let peakDBFS: Float
+public struct CaptureLevels: Equatable, Sendable {
+    public let averageDBFS: Float
+    public let peakDBFS: Float
 }
 
 /// An explicitly routed, local-only session. Mic Check runs an audio data
 /// output and discards its buffers; recording runs the AAC file output.
-final class MicrophoneCapture: NSObject, AudioRecording, AVCaptureFileOutputRecordingDelegate,
+final class MicrophoneCapture: NSObject, MeteredAudioRecording, AVCaptureFileOutputRecordingDelegate,
     AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let session = AVCaptureSession()
     // Serialize hardware transitions so a Mic Check is fully closed before
@@ -163,12 +163,12 @@ final class MicrophoneCapture: NSObject, AudioRecording, AVCaptureFileOutputReco
         return true
     }
 
-    func sampleAudioLevels() -> AudioLevels? {
+    func sampleAudioLevels() -> CaptureLevels? {
         guard session.isRunning,
               let channels = audioConnection?.audioChannels,
               let average = channels.map(\.averagePowerLevel).filter(\.isFinite).max(),
               let peak = channels.map(\.peakHoldLevel).filter(\.isFinite).max() else { return nil }
-        return AudioLevels(averageDBFS: average, peakDBFS: peak)
+        return CaptureLevels(averageDBFS: average, peakDBFS: peak)
     }
 
     private var audioConnection: AVCaptureConnection? {

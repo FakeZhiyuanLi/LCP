@@ -19,6 +19,10 @@ extension AudioRecording {
 
 extension AVAudioRecorder: AudioRecording {}
 
+protocol MeteredAudioRecording: AudioRecording {
+    func sampleAudioLevels() -> CaptureLevels?
+}
+
 /// Own this engine for the lifetime of the menu bar app. Handle initialization
 /// and start errors in the UI; a failed recording never becomes active.
 @MainActor
@@ -35,7 +39,7 @@ final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     @Published private(set) var isFinishing = false
     /// Internal coordinator boundary; invoked after the encoder and marker work.
     var onSessionEnded: ((URL, Bool) -> Void)?
-    var onMonitoringEnded: (() -> Void)?
+    var onMonitoringEnded: ((String?) -> Void)?
 
     private static let microphonePreference = "preferredMicrophoneID"
     private let ingestManager: IngestManager
@@ -44,7 +48,7 @@ final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     private var recorder: (any AudioRecording)?
     private var outputURL: URL?
     private var durationTimer: Timer?
-    private var monitor: MicrophoneCapture?
+    private var monitor: (any MeteredAudioRecording)?
     private var publishOnFinish = true
     private var terminationDeferred = false
     private nonisolated let recordingFailures = RecordingFailureState()
@@ -145,41 +149,38 @@ final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         }
     }
 
-    func stopMonitoring() {
+    func stopMonitoring(failure: String? = nil) {
         guard let monitor else { return }
         monitor.stop()
         self.monitor = nil
         isMonitoring = false
         if !isRecording { activeMicrophoneName = nil }
-        onMonitoringEnded?()
+        onMonitoringEnded?(failure)
     }
 
-    func sampleAudioLevels() -> AudioLevels? {
+    func sampleAudioLevels() -> CaptureLevels? {
         guard !isFinishing else { return nil }
-        return (recorder as? MicrophoneCapture ?? monitor)?.sampleAudioLevels()
+        return (recorder as? any MeteredAudioRecording ?? monitor)?.sampleAudioLevels()
     }
 
-    private func makeMicrophoneCapture(url: URL?) throws -> (MicrophoneCapture, String) {
-        let device = try MicrophoneCapture.device(id: selectedMicrophoneID)
-        let capture = try MicrophoneCapture(
-            device: device, url: url, settings: configuration.recorderSettings,
-            onFinish: { [weak self] identity, success in
+    private func makeMicrophoneCapture(url: URL?) throws -> (any MeteredAudioRecording, String) {
+        try dependencies.makeMicrophone(selectedMicrophoneID, url, configuration.recorderSettings,
+            { [weak self] identity, success in
                 self?.recordingDidFinish(identity: identity, successfully: success)
             },
-            onFailure: { [weak self] identity, message in
+            { [weak self] identity, message in
                 self?.recordingFailures.record(identity: identity, message: message)
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     if let monitor = self.monitor, ObjectIdentifier(monitor) == identity {
-                        self.stopMonitoring()
                         self.errorMessage = message
+                        self.stopMonitoring(failure: message)
                     } else {
                         self.failEncoding(identity: identity, message: message)
                     }
                 }
             }
         )
-        return (capture, device.localizedName)
     }
 
     /// The eventual app bundle must provide NSMicrophoneUsageDescription.
@@ -422,6 +423,14 @@ extension AudioRecorder {
         var makeRecorder: (URL, [String: Any]) throws -> any AudioRecording
         var writeManifest: (URL) throws -> Void = { try RecordingManifest.write(for: $0) }
         var routesMicrophone = false
+        var makeMicrophone: (String, URL?, [String: Any],
+                             @escaping @Sendable (ObjectIdentifier, Bool) -> Void,
+                             @escaping @Sendable (ObjectIdentifier, String) -> Void) throws -> (any MeteredAudioRecording, String) = {
+            id, url, settings, finished, failed in
+            let device = try MicrophoneCapture.device(id: id)
+            let input = try MicrophoneCapture(device: device, url: url, settings: settings, onFinish: finished, onFailure: failed)
+            return (input, device.localizedName)
+        }
 
         static var live: Self {
             Self(

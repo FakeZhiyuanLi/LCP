@@ -69,6 +69,61 @@ final class CaptureCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testMicCheckUsesRealMeterPathAndHandsItsLeaseToRecording() async throws {
+        let root = try temporaryRoot()
+        let fixture = try fixture(root: root)
+        let capture = fixture.coordinator
+        let check = UUID()
+        try await capture.beginMicrophoneCheck(id: check)
+        XCTAssertTrue(capture.isMonitoring)
+        XCTAssertNil(capture.activeSession)
+        XCTAssertNil(fixture.recording.output)
+        XCTAssertEqual(capture.activeMicrophoneName, "Fictional input")
+        capture.endMicrophoneCheck(id: UUID())
+        XCTAssertTrue(capture.isMonitoring)
+        let peer = try self.fixture(root: root, folder: "peer")
+        await assertThrows(.captureInUse) { try await peer.coordinator.start(destinationID: "ICS 46") }
+        fixture.monitor.sample = CaptureLevels(averageDBFS: -32, peakDBFS: -9)
+        for _ in 0..<50 where capture.levels != fixture.monitor.sample { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(capture.levels, fixture.monitor.sample)
+
+        let classID = UUID()
+        try await capture.startLocal(academicClassID: classID, className: "Seminar", recordingsDirectory: root.appendingPathComponent("Recordings"))
+        XCTAssertFalse(capture.isMonitoring)
+        capture.endMicrophoneCheck(id: check)
+        XCTAssertEqual(capture.state, .recording)
+        fixture.recording.sample = CaptureLevels(averageDBFS: -18, peakDBFS: -2)
+        for _ in 0..<50 where capture.levels != fixture.recording.sample { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(capture.levels, fixture.recording.sample)
+        capture.stop()
+        XCTAssertEqual(capture.lastFinalized?.session.academicClassID, classID)
+        XCTAssertNil(capture.levels)
+        try await capture.beginMicrophoneCheck(id: check)
+        capture.endMicrophoneCheck(id: check)
+        XCTAssertFalse(capture.isMonitoring)
+        try await peer.coordinator.start(destinationID: "ICS 46")
+        peer.coordinator.stop()
+    }
+
+    @MainActor
+    func testDismissedOrDeniedMicCheckCannotOpenTheInputAfterPermission() async throws {
+        let fixture = try fixture()
+        let capture = fixture.coordinator
+        let id = UUID()
+        fixture.authorization = .denied
+        await assertThrows(.permissionDenied) { try await capture.beginMicrophoneCheck(id: id) }
+        fixture.authorization = .notDetermined
+        fixture.onPermission = { capture.endMicrophoneCheck(id: id) }
+        do {
+            try await capture.beginMicrophoneCheck(id: id)
+            XCTFail("A dismissed check started after the microphone prompt.")
+        } catch is CancellationError {}
+        XCTAssertEqual(fixture.monitorCreations, 0)
+        XCTAssertFalse(capture.isMonitoring)
+        XCTAssertNil(capture.levels)
+    }
+
+    @MainActor
     func testCatalogDestinationFrozenDuringRecordingAndFinalization() async throws {
         let fixture = try fixture(asynchronous: true)
         try await fixture.coordinator.start(destinationID: "ICS 46")
@@ -468,6 +523,8 @@ private final class CoordinatorFixture {
     var incompatible = false
     var writeManifest: (URL) throws -> Void = { try RecordingManifest.write(for: $0) }
     let recording = CoordinatorFakeRecording()
+    let monitor = CoordinatorFakeRecording()
+    var monitorCreations = 0
     lazy var engine: AudioRecorder = {
         try! AudioRecorder(ingestManager: IngestManager(stagingDirectory: configuration.stagingDirectory), dependencies: .init(
             hasMicrophoneUsageDescription: { true }, authorizationStatus: { self.authorization },
@@ -482,7 +539,12 @@ private final class CoordinatorFixture {
                 self.recording.output = url
                 try Data("synthetic closed audio".utf8).write(to: url)
                 return self.recording
-            }, writeManifest: { try self.writeManifest($0) }
+            }, writeManifest: { try self.writeManifest($0) },
+            makeMicrophone: { _, url, _, _, _ in
+                XCTAssertNil(url)
+                self.monitorCreations += 1
+                return (self.monitor, "Fictional input")
+            }
         ))
     }()
     lazy var coordinator = makeCoordinator()
@@ -500,13 +562,15 @@ private final class CoordinatorFixture {
     }
 }
 
-private final class CoordinatorFakeRecording: AudioRecording {
+private final class CoordinatorFakeRecording: MeteredAudioRecording {
     weak var delegate: (any AVAudioRecorderDelegate)?
     var currentTime: TimeInterval = 4
     var finalizesAsynchronously = false
     var preparesSuccessfully = true
     var output: URL?
     var starts = 0
+    var sample: CaptureLevels?
+    func sampleAudioLevels() -> CaptureLevels? { sample }
     func prepareToRecord() -> Bool { preparesSuccessfully }
     func record() -> Bool { starts += 1; return true }
     func stop() {}

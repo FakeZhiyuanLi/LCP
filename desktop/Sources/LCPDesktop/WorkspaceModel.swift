@@ -879,10 +879,10 @@ final class WorkspaceModel: ObservableObject {
         guard let repository else { return }
         perform { try ProposalService(repository: repository).reject(id) }
     }
-    func initializeCapture() {
+    func initializeCapture(makeCoordinator: @MainActor () throws -> CaptureCoordinator = { try CaptureCoordinator() }) {
         guard capture == nil else { return }
         perform {
-            let coordinator = try CaptureCoordinator()
+            let coordinator = try makeCoordinator()
             coordinator.$state.sink { [weak self] state in self?.captureIsRecording = state == .recording || state == .finalizing }.store(in: &captureSubscriptions)
             coordinator.$lastFinalized.compactMap { $0 }.sink { [weak self] finalized in self?.saveFinalizedCapture(finalized) }.store(in: &captureSubscriptions)
             capture = coordinator
@@ -890,6 +890,31 @@ final class WorkspaceModel: ObservableObject {
     }
     func openCapture() {
         inWorkspace("Open Capture") { self.selection = .capture }
+    }
+    func startLectureCapture(for classID: UUID, route: LectureCaptureRoute) async throws {
+        guard !restorePending, !captureInProgress, let capture else { throw CaptureError.captureInUse }
+        guard let course = state.classes.first(where: { $0.id == classID }) else {
+            throw DesktopUIError.message("This class is no longer in your library.")
+        }
+        let mapping: RecordingDestination?
+        switch route {
+        case .classDefault:
+            if course.recordingDestination != nil { capture.reloadDestinations() }
+            mapping = course.availableCaptureMapping(in: capture)
+        case .local:
+            mapping = nil
+        case .synced(let selected):
+            guard course.recordingDestination == selected else { throw CaptureError.destinationChanged }
+            mapping = selected
+        }
+        captureClassID = course.id
+        if let mapping {
+            try await capture.start(destinationID: mapping.exactCourseCode, academicClassID: course.id,
+                                    expectedDriveFolderID: mapping.driveFolderID)
+        } else {
+            try await capture.startLocal(academicClassID: course.id, className: course.shortLabel,
+                                         recordingsDirectory: rootURL.appendingPathComponent("Recordings", isDirectory: true))
+        }
     }
     private func saveFinalizedCapture(_ finalized: FinalizedCapture) {
         let session = finalized.session
@@ -1092,6 +1117,17 @@ struct WorkspaceClassGroup: Identifiable {
 }
 
 enum LibraryTransfer { case backup, restore }
+enum LectureCaptureRoute { case classDefault, local, synced(RecordingDestination) }
+
+extension ClassEnrollment {
+    @MainActor func availableCaptureMapping(in capture: CaptureCoordinator) -> RecordingDestination? {
+        guard let mapping = recordingDestination, !mapping.driveFolderID.isEmpty, capture.catalogIsUsable,
+              capture.destinations.contains(where: { $0.courseCode == mapping.exactCourseCode && $0.driveFolderID == mapping.driveFolderID })
+        else { return nil }
+        return mapping
+    }
+}
+
 enum WorkspaceRoute: Hashable, Codable { case welcome, capture, universityConnections, planner, universityChat, classDetail(UUID), connections, review }
 enum WorkspaceEditor: Hashable, Identifiable {
     case newTerm, editTerm, newClass, newActivity, newCoursework, newAgentGrant, newBYOKProvider

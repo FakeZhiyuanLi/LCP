@@ -12,11 +12,6 @@ public struct CaptureDestination: Identifiable, Equatable, Codable, Sendable {
     public let driveFolderID: String?
 }
 
-public struct CaptureLevels: Equatable, Sendable {
-    public let averageDBFS: Float
-    public let peakDBFS: Float
-}
-
 public struct CaptureSession: Identifiable, Equatable, Codable, Sendable {
     public let id: UUID
     public let academicClassID: UUID?
@@ -96,6 +91,11 @@ public final class CaptureCoordinator: ObservableObject {
     @Published public private(set) var statusMessage: String?
     @Published public private(set) var duration: TimeInterval = 0
     @Published public private(set) var levels: CaptureLevels?
+    @Published public private(set) var microphoneDevices: [MicrophoneDevice] = []
+    @Published public private(set) var selectedMicrophoneID = ""
+    @Published public private(set) var defaultMicrophoneName: String?
+    @Published public private(set) var activeMicrophoneName: String?
+    @Published public private(set) var isMonitoring = false
     @Published public private(set) var destinations: [CaptureDestination] = []
     @Published public private(set) var catalogIsUsable = false
     @Published public private(set) var catalogIssue: String?
@@ -114,6 +114,7 @@ public final class CaptureCoordinator: ObservableObject {
     private var lease: CaptureLease?
     private var monitoringLease: CaptureLease?
     private var monitoringID: UUID?
+    private var pendingMicrophoneCheck: UUID?
     private var subscriptions = Set<AnyCancellable>()
     private var levelTimer: Timer?
     private var startPending = false
@@ -134,7 +135,15 @@ public final class CaptureCoordinator: ObservableObject {
         self.compatibilityCheck = compatibilityCheck
         self.now = now
         engine.onSessionEnded = { [weak self] url, published in self?.sessionEnded(url: url, published: published) }
-        engine.onMonitoringEnded = { [weak self] in self?.releaseMonitoringLease() }
+        engine.onMonitoringEnded = { [weak self] failure in
+            self?.releaseMonitoringLease()
+            if let failure { self?.statusMessage = failure }
+        }
+        engine.$microphoneDevices.assign(to: &$microphoneDevices)
+        engine.$selectedMicrophoneID.assign(to: &$selectedMicrophoneID)
+        engine.$defaultMicrophoneName.assign(to: &$defaultMicrophoneName)
+        engine.$activeMicrophoneName.assign(to: &$activeMicrophoneName)
+        engine.$isMonitoring.assign(to: &$isMonitoring)
         engine.$duration.sink { [weak self] in self?.duration = $0 }.store(in: &subscriptions)
         engine.$isFinishing.sink { [weak self] finishing in
             if finishing { self?.state = .finalizing }
@@ -190,11 +199,7 @@ public final class CaptureCoordinator: ObservableObject {
             engine.courseCode = destination.courseCode
             try engine.startRecording(at: try localOutput?(session))
             state = .recording
-            let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.refreshLevels() }
-            }
-            levelTimer = timer
-            RunLoop.main.add(timer, forMode: .common)
+            startLevelTimer()
         } catch {
             releaseSession()
             state = .blocked
@@ -211,21 +216,62 @@ public final class CaptureCoordinator: ObservableObject {
     public func deferApplicationTermination() -> Bool { engine.deferApplicationTermination() }
 
     public func refreshLevels() {
-        levels = engine.sampleAudioLevels().map { CaptureLevels(averageDBFS: $0.averageDBFS, peakDBFS: $0.peakDBFS) }
+        let sample = engine.sampleAudioLevels()
+        if levels != sample { levels = sample }
     }
 
-    /// The compatible legacy host uses these same guards for its optional
-    /// microphone diagnostic. The desktop exposes recording through start().
-    func startMonitoring() throws {
+    private func startLevelTimer() {
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshLevels() }
+        }
+        levelTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopLevelTimer() {
+        levelTimer?.invalidate()
+        levelTimer = nil
+        levels = nil
+    }
+
+    public func refreshMicrophones() { engine.refreshMicrophones() }
+
+    public func selectMicrophone(_ id: String) {
+        guard activeSession == nil, !startPending, pendingMicrophoneCheck == nil else { return }
+        engine.selectMicrophone(id)
+    }
+
+    /// The view owns its check, including time spent waiting in the macOS permission dialog.
+    public func beginMicrophoneCheck(id: UUID) async throws {
+        try Task.checkCancellation()
+        guard activeSession == nil, !startPending, monitoringID == nil, pendingMicrophoneCheck == nil else {
+            throw CaptureError.captureInUse
+        }
+        try checkCompatibility()
+        pendingMicrophoneCheck = id
+        defer { if pendingMicrophoneCheck == id { pendingMicrophoneCheck = nil } }
+        let allowed = await engine.requestPermission()
+        try Task.checkCancellation()
+        guard pendingMicrophoneCheck == id else { throw CancellationError() }
+        guard allowed else { throw CaptureError.permissionDenied }
+        try startMonitoring(id: id)
+    }
+
+    public func endMicrophoneCheck(id: UUID) {
+        if pendingMicrophoneCheck == id { pendingMicrophoneCheck = nil }
+        if monitoringID == id { stopMonitoring() }
+    }
+
+    func startMonitoring(id: UUID = UUID()) throws {
         guard activeSession == nil, !startPending else { throw CaptureError.captureInUse }
         guard !engine.isMonitoring else { return }
         do {
             try compatibilityCheck()
-            let id = UUID()
             monitoringLease = try CaptureLease.acquire(at: configuration.leaseURL, sessionID: id)
             monitoringID = id
             Self.retainedSessions[id] = self
             try engine.startMonitoring()
+            startLevelTimer()
         } catch {
             releaseMonitoringLease()
             statusMessage = error.localizedDescription
@@ -233,9 +279,13 @@ public final class CaptureCoordinator: ObservableObject {
         }
     }
 
-    func stopMonitoring() { engine.stopMonitoring() }
+    func stopMonitoring() {
+        pendingMicrophoneCheck = nil
+        engine.stopMonitoring()
+    }
 
     private func releaseMonitoringLease() {
+        stopLevelTimer()
         monitoringLease?.release()
         monitoringLease = nil
         if let id = monitoringID { Self.retainedSessions.removeValue(forKey: id) }
@@ -305,9 +355,8 @@ public final class CaptureCoordinator: ObservableObject {
     }
 
     private func releaseSession() {
-        levelTimer?.invalidate()
-        levelTimer = nil
-        levels = nil
+        // A configuration error can happen before start() ends an existing mic check.
+        if monitoringID == nil { stopLevelTimer() }
         lease?.release()
         lease = nil
         if let id = activeSession?.id { Self.retainedSessions.removeValue(forKey: id) }

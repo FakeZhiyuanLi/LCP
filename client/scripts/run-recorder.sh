@@ -42,6 +42,7 @@ xcrun swiftc \
     "$client_directory/Sources/Storage/RecordingManifest.swift" \
     "$client_directory/Sources/Audio/AudioRecorder.swift" \
     "$client_directory/Sources/Audio/MicrophoneCapture.swift" \
+    "$client_directory/Sources/Audio/AudioLevelMeter.swift" \
     "$client_directory/Sources/Capture/CaptureLease.swift" \
     "$client_directory/Sources/Capture/CaptureCompatibility.swift" \
     "$client_directory/Sources/Capture/CaptureCoordinator.swift" \

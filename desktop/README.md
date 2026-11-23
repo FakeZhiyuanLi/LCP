@@ -218,7 +218,7 @@ with the copied diagnostic ID.
   for the service you want and sign in through the browser. Each connection
   requests its own read permission. Drive also offers permission to create class folders. A managed UCI account may require
   Workspace administrator approval. [Google desktop OAuth guide](https://developers.google.com/identity/protocols/oauth2/native-app) · [Google API Library](https://console.cloud.google.com/apis/library)
-- **Class folders in Drive.** New classes automatically look for a matching folder directly under **School Lectures**, using the course code or, if omitted, the class name. LCP reuses a match and creates a missing folder when Drive allows it. An offline class saves immediately and folder setup can resume later. Open **Materials** for the folder link or setup status. Older classes can opt in with **Set Up Google Drive Folder**. If Drive was connected for reading, choose **Connections → Google Drive → Manage… → Enable Folder Creation…** to authorize creation. To send recordings for server processing, choose the synced destination separately in **Capture**.
+- **Class folders in Drive.** New classes automatically look for a matching folder directly under **School Lectures**, using the course code or, if omitted, the class name. LCP reuses a match and creates a missing folder when Drive allows it. An offline class saves immediately and folder setup can resume later. Open **Materials** for the folder link or setup status. Older classes can opt in with **Set Up Google Drive Folder**. If Drive was connected for reading, choose **Connections → Google Drive → Manage… → Enable Folder Creation…** to authorize creation. To send recordings for server processing, set the class’s synced folder in the sidebar’s **Capture** workspace.
 - **Drive materials.** Search for a file by name or text. LCP downloads the
   selected file or exports supported Google Workspace documents, slides and
   sheets as PDFs. **Gmail materials.** Use a Gmail search such as
@@ -321,7 +321,9 @@ beneath the answer, including when the provider replies with just a graphic.
 
 ## Lecture feed and capture
 
-Every academic class can record locally, including name-only classes. In **Capture**, choose the class and its **On this Mac** destination. Finalized audio is stored in the library’s `Recordings` folder and appears under that class’s **Lectures** tab. Select a catalog destination and save its mapping to send future recordings through the server processing workflow.
+Open a class, choose **Capture**, and click **Start Recording**. The recording appears in that class’s **Lectures** tab. LCP uses the class’s saved synced folder when available. Otherwise it saves the audio in the library’s `Recordings` folder on this Mac. To configure a class’s synced folder, use **Capture** in the sidebar.
+
+Expand **Recording options** to select a microphone or view its live input level. **Test microphone** lets you check the level before recording. Closing the options or leaving Capture ends the mic test. An ongoing lecture continues recording when you navigate elsewhere.
 
 For a self-hosted transcript feed, sync the server export directory as **Send
 Only** and `~/Library/Application Support/LCP Desktop/Feed` on the Mac as
