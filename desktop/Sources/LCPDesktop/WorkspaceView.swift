@@ -607,6 +607,14 @@ struct ClassContextView: View {
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 5))
                 }
+                if selectedTab == .chat {
+                    Text(enrollment.title)
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(1)
+                        .help(enrollment.title)
+                        .accessibilityAddTraits(.isHeader)
+                        .textSelection(.enabled)
+                }
                 if let term = model.state.terms.first(where: { $0.id == enrollment.termID }) {
                     Text(term.name).font(.callout).foregroundStyle(.white.opacity(0.86))
                 }
@@ -624,28 +632,31 @@ struct ClassContextView: View {
                 .background(Color(white: 0.94), in: Capsule())
                 .accessibilityLabel("Class actions").help("Class actions")
             }
-            Text(enrollment.title)
-                .font(.system(size: 30, weight: .semibold)).tracking(-0.7)
-                .accessibilityAddTraits(.isHeader)
-                .textSelection(.enabled)
-            let details = [enrollment.instructor, enrollment.section, enrollment.sessionDetails ?? "", enrollment.location ?? ""]
-                .filter { !$0.isEmpty }.joined(separator: "  ·  ")
-            if !details.isEmpty {
-                Text(details).font(.callout).textSelection(.enabled)
+            if selectedTab != .chat {
+                Text(enrollment.title)
+                    .font(.system(size: 30, weight: .semibold)).tracking(-0.7)
+                    .accessibilityAddTraits(.isHeader)
+                    .textSelection(.enabled)
+                let details = [enrollment.instructor, enrollment.section, enrollment.sessionDetails ?? "", enrollment.location ?? ""]
+                    .filter { !$0.isEmpty }.joined(separator: "  ·  ")
+                if !details.isEmpty {
+                    Text(details).font(.callout).textSelection(.enabled)
+                }
+                HStack(spacing: 16) {
+                    let materials = model.state.materials.filter { $0.classID == enrollment.id }.count
+                    let history = model.state.activities.filter { $0.classID == enrollment.id }.count
+                    let lectures = model.state.recordings.filter { $0.classID == enrollment.id }.count
+                    Label("\(materials) \(materials == 1 ? "material" : "materials")", systemImage: "doc.on.doc")
+                    Label("\(history) \(history == 1 ? "entry" : "entries")", systemImage: "clock")
+                    Label("\(lectures) \(lectures == 1 ? "lecture" : "lectures")", systemImage: "waveform")
+                }
+                .font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.85))
+                .padding(.top, 5)
             }
-            HStack(spacing: 16) {
-                let materials = model.state.materials.filter { $0.classID == enrollment.id }.count
-                let history = model.state.activities.filter { $0.classID == enrollment.id }.count
-                let lectures = model.state.recordings.filter { $0.classID == enrollment.id }.count
-                Label("\(materials) \(materials == 1 ? "material" : "materials")", systemImage: "doc.on.doc")
-                Label("\(history) \(history == 1 ? "entry" : "entries")", systemImage: "clock")
-                Label("\(lectures) \(lectures == 1 ? "lecture" : "lectures")", systemImage: "waveform")
-            }
-            .font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.85))
-            .padding(.top, 5)
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 22).padding(.vertical, 16)
+        .padding(.horizontal, selectedTab == .chat ? 16 : 22)
+        .padding(.vertical, selectedTab == .chat ? 8 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             WorkspacePalette.cover(for: enrollment.shortLabel)

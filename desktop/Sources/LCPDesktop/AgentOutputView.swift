@@ -92,6 +92,7 @@ enum AgentOutputBlock: Equatable, Sendable {
 
 struct AgentOutputView: View {
     let source: String
+    var onFirstLayout: (() -> Void)?
     @State private var blocks: [AgentOutputBlock] = []
 
     var body: some View {
@@ -101,6 +102,13 @@ struct AgentOutputView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            if !blocks.isEmpty, let onFirstLayout {
+                Color.clear.onGeometryChange(for: Bool.self) { $0.size.height > 0 } action: { ready in
+                    if ready { onFirstLayout() }
+                }
+            }
+        }
         .textSelection(.enabled)
         .task(id: source) {
             let prepared = await AgentOutputBlock.prepare(source)

@@ -100,6 +100,50 @@ final class ChatNavigationTests: XCTestCase {
         XCTAssertTrue(model.chatSession(for: nil).draft.isEmpty)
     }
 
+    func testStreamingFollowsLatestUntilReaderScrollsUp() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (model, _, provider) = try makeWorkspace(at: root)
+        model.selection = .universityChat
+        let window = NSWindow(contentViewController: NSHostingController(rootView: WorkspaceView(model: model)))
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.setContentSize(NSSize(width: 980, height: 660))
+        window.orderBack(nil)
+        let content = try XCTUnwrap(window.contentView)
+        let chat = model.chatSession(for: nil)
+        try await waitFor("chat composer") { self.editor(in: content) != nil }
+        chat.draft = "Explain each observation."
+        chat.send(in: model, using: provider)
+        try await waitFor("stream") { chat.generation?.update != nil }
+        let stream = try XCTUnwrap(PausedChatStream.requests.first)
+        let paragraphs = (1...80).map { "\n\nObservation \($0)." }.joined()
+        try stream.appendText(paragraphs)
+        var history: NSScrollView?
+        func findHistory(in view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView, (scroll.documentView?.bounds.height ?? 0) > 1_500 { return scroll }
+            return view.subviews.lazy.compactMap { findHistory(in: $0) }.first
+        }
+        try await waitFor("rendered paragraphs") {
+            history = findHistory(in: content)
+            return history != nil
+        }
+        let scroll = try XCTUnwrap(history)
+        let document = try XCTUnwrap(scroll.documentView)
+        try await waitFor("following the rendered end") { document.bounds.maxY - scroll.documentVisibleRect.maxY < 24 }
+        let wheel = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                          wheel1: 4_000, wheel2: 0, wheel3: 0))
+        scroll.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: wheel)))
+        try await waitFor("reading the start") { scroll.documentVisibleRect.minY < 5 }
+        let firstHeight = document.bounds.height
+        try stream.appendText(paragraphs)
+        try await waitFor("new paragraphs below the reader") { document.bounds.height > firstHeight + 300 }
+        XCTAssertLessThan(scroll.documentVisibleRect.minY, 5)
+        stream.finish()
+        try await waitFor("saved response") { chat.generation == nil && model.chatThread(classID: nil)?.messages.count == 2 }
+    }
+
     func testChangingLibraryDetachesDraftAndRunningRequest() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let other = root.appendingPathComponent("Other")
@@ -171,6 +215,10 @@ private final class PausedChatStream: URLProtocol, @unchecked Sendable {
         sendEvent(#"{"type":"response.output_text.delta","delta":"Start with stars"}"#)
     }
     override func stopLoading() {}
+    func appendText(_ text: String) throws {
+        let data = try JSONEncoder().encode(["type": "response.output_text.delta", "delta": text])
+        sendEvent(String(decoding: data, as: UTF8.self))
+    }
     func finish() {
         sendEvent(#"{"type":"response.output_text.delta","delta":" and planets."}"#)
         sendEvent(#"{"type":"response.completed","response":{"usage":{"total_tokens":17}}}"#)

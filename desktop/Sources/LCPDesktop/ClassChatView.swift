@@ -12,14 +12,18 @@ struct ClassChatView: View {
     @State private var hoveringFiles = false
     @State private var loadingContext = false
     @State private var contextTask: Task<Void, Never>?
+    @State private var showingContext = false
+    @State private var transcriptLayout: TranscriptLayout?
+    @State private var alignedReplyID: UUID?
+    @FocusState private var composerFocused: Bool
 
-    private let streamingBubbleID = "lcp-chat-streaming-bubble"
     private var globalScope: Bool { session.classID == nil }
     private var sending: Bool { session.generation != nil }
     private var selectedProfile: AgentProviderProfile? { profiles.first { $0.id == session.selectedProfileID } }
     private var activeClassIDs: [UUID] { session.classIDs(in: model) }
     private var messages: [ChatMessage] { model.chatThread(classID: session.classID)?.messages ?? [] }
     private var unsavedReply: UnsavedChatReply? { model.unsavedChatReplies[session.classID] }
+    private var latestReplyID: UUID? { session.generation?.id ?? unsavedReply?.diagnostics.id ?? messages.last?.id }
 
     init(model: WorkspaceModel, classID: UUID? = nil) {
         self.model = model
@@ -27,23 +31,15 @@ struct ClassChatView: View {
     }
 
     var body: some View {
-        Group {
-            if profiles.isEmpty && messages.isEmpty && session.draft.isEmpty && session.uploads.isEmpty && !sending && unsavedReply == nil {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        header
-                        Divider()
-                        noProvider
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            } else {
-                VStack(spacing: 0) {
-                    header
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                header(proxy)
+                Divider()
+                if profiles.isEmpty && messages.isEmpty && session.draft.isEmpty && session.uploads.isEmpty && !sending && unsavedReply == nil {
+                    ScrollView { noProvider }
+                } else {
+                    messageList(proxy)
                     Divider()
-                    contextSummary
-                    messageList
-                    if let generation = session.generation { generationBanner(generation) }
                     composer
                 }
             }
@@ -63,30 +59,33 @@ struct ClassChatView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Label(globalScope ? "University chat" : "Class chat", systemImage: "bubble.left.and.bubble.right.fill")
-                    .font(.title2.weight(.semibold))
-                Spacer(minLength: 12)
-                if let generation = session.generation { generationStatus(generation) }
+    private func header(_ proxy: ScrollViewProxy) -> some View {
+        HStack(spacing: 12) {
+            Label(globalScope ? "University chat" : "Class chat", systemImage: "bubble.left.and.bubble.right")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 8)
+            if let generation = session.generation { generationStatus(generation).help(generation.phase.detail) }
+            if transcriptLayout?.nearLatest == false, let latestReplyID {
+                Button("Jump to latest", systemImage: "arrow.down.to.line") {
+                    proxy.scrollTo(latestReplyID, anchor: .bottom)
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help("Jump to the end of the latest message")
             }
-            Text(globalScope
-                 ? "A persistent study conversation grounded in the active classes in your LCP library."
-                 : "A persistent study conversation grounded only in this class's saved context.")
-                .font(.callout)
-                .foregroundStyle(WorkspacePalette.muted)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("Each reply receives a fresh, bounded context snapshot. Raw audio, credentials, and connection grants stay local.")
-                .font(.caption)
-                .foregroundStyle(WorkspacePalette.muted)
-                .fixedSize(horizontal: false, vertical: true)
+            Button("Context", systemImage: "doc.text.magnifyingglass") { showingContext.toggle() }
+                .buttonStyle(.bordered)
+                .help("View and refresh the sources for the next reply")
+                .popover(isPresented: $showingContext) {
+                    contextSummary
+                        .onAppear {
+                            if session.context == nil && !sending { scheduleContextRefresh() }
+                        }
+                }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 16)
-        .padding(.bottom, 12)
-        .frame(maxWidth: 920, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+        .modifier(ChatColumn())
     }
 
     private func generationStatus(_ generation: ChatSession.Generation) -> some View {
@@ -136,17 +135,23 @@ struct ClassChatView: View {
     private var contextSummary: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Label("Fresh context for the next reply", systemImage: "doc.text.magnifyingglass")
-                    .font(.callout.weight(.semibold))
+                Text("Context for the next reply")
+                    .font(.headline)
                     .foregroundStyle(WorkspacePalette.ink)
                 Spacer(minLength: 8)
                 if loadingContext { ProgressView().controlSize(.small) }
                 Button("Refresh", systemImage: "arrow.clockwise") { scheduleContextRefresh() }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
-                    .help("Refresh the class context")
+                    .help("Refresh context")
                     .disabled(loadingContext || sending || activeClassIDs.isEmpty)
             }
+            Text(globalScope
+                 ? "Replies use saved sources from your active classes and any files you attach."
+                 : "Replies use saved sources from this class and any files you attach.")
+                .font(.callout)
+                .foregroundStyle(WorkspacePalette.muted)
+                .fixedSize(horizontal: false, vertical: true)
             if let context = session.context {
                 HStack(spacing: 7) {
                     contextBadge(systemImage: "square.stack.3d.up", text: "\(context.sourceCount) sources")
@@ -158,6 +163,7 @@ struct ClassChatView: View {
                     .font(.caption)
                     .foregroundStyle(WorkspacePalette.muted)
                     .lineLimit(2)
+                    .help(context.classLabels.joined(separator: " · "))
             } else if activeClassIDs.isEmpty {
                 Text(globalScope ? "You can start with a question or attach a file." : "This class is not available in the library.")
                     .font(.caption)
@@ -173,13 +179,8 @@ struct ClassChatView: View {
                 }
             }
         }
-        .padding(13)
-        .frame(maxWidth: 920, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(WorkspacePalette.tintSurface.opacity(0.72), in: RoundedRectangle(cornerRadius: 13))
-        .overlay { RoundedRectangle(cornerRadius: 13).strokeBorder(WorkspacePalette.line.opacity(0.8)) }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
+        .padding(16)
+        .frame(width: 350, alignment: .leading)
     }
 
     private func contextBadge(systemImage: String, text: String) -> some View {
@@ -192,57 +193,81 @@ struct ClassChatView: View {
             .overlay { Capsule().strokeBorder(WorkspacePalette.line.opacity(0.7)) }
     }
 
-    private var messageList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    if messages.isEmpty && !sending && unsavedReply == nil {
-                        VStack(alignment: .leading, spacing: 9) {
-                            Label(globalScope ? "Start your university conversation" : "Start your class conversation", systemImage: "sparkles")
-                                .font(.headline)
-                            Text(globalScope
-                                 ? "Ask about priorities across your classes, upcoming deadlines, or how to balance the week."
-                                 : "Ask about a lecture, reading, assignment, or the next thing you should review.")
-                                .foregroundStyle(WorkspacePalette.muted)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(18)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 14))
-                        .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WorkspacePalette.line) }
-                    } else {
-                        ForEach(messages) { message in
-                            ChatMessageBubble(model: model, threadID: model.chatThread(classID: session.classID)?.id, message: message) { citation in
-                                model.presentedCitation = citation
-                            }
-                            .id(message.id)
-                        }
-                        if let generation = session.generation {
-                            pendingUserBubble(generation.question, filenames: generation.filenames)
-                                .id("lcp-chat-pending-user")
-                            StreamingMessageBubble(text: generation.update?.text ?? "", provider: generation.providerName,
-                                                   usage: generation.update?.usage, requestID: generation.update?.requestID)
-                                .id(streamingBubbleID)
-                        } else if let unsavedReply {
-                            pendingUserBubble(unsavedReply.question, filenames: unsavedReply.result.uploads.map(\.attachment.filename), status: "unsaved")
-                            StreamingMessageBubble(text: unsavedReply.result.response.text, provider: unsavedReply.profile.name,
-                                                   usage: unsavedReply.result.response.usage, requestID: unsavedReply.result.response.requestID,
-                                                   badge: "unsaved")
-                                .id(streamingBubbleID)
-                        }
+    private func messageList(_ proxy: ScrollViewProxy) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                if messages.isEmpty && !sending && unsavedReply == nil {
+                    VStack(alignment: .leading, spacing: 9) {
+                        Label(globalScope ? "Start your university conversation" : "Start your class conversation", systemImage: "sparkles")
+                            .font(.headline)
+                        Text(globalScope
+                             ? "Ask about priorities across your classes, upcoming deadlines, or how to balance the week."
+                             : "Ask about a lecture, reading, assignment, or the next thing you should review.")
+                            .foregroundStyle(WorkspacePalette.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WorkspacePalette.line) }
+                } else {
+                    ForEach(messages) { message in
+                        ChatMessageBubble(model: model, threadID: model.chatThread(classID: session.classID)?.id,
+                                          message: message, openCitation: { model.presentedCitation = $0 },
+                                          onFirstLayout: { alignRenderedReply(message.id, in: proxy) })
+                        .id(message.id)
+                    }
+                    if let generation = session.generation {
+                        pendingUserBubble(generation.question, filenames: generation.filenames)
+                            .id("lcp-chat-pending-user")
+                        StreamingMessageBubble(text: generation.update?.text ?? "", provider: generation.providerName,
+                                               usage: generation.update?.usage, requestID: generation.update?.requestID,
+                                               onFirstLayout: { alignRenderedReply(generation.id, in: proxy) })
+                            .id(generation.id)
+                    } else if let unsavedReply {
+                        pendingUserBubble(unsavedReply.question, filenames: unsavedReply.result.uploads.map(\.attachment.filename), status: "unsaved")
+                        StreamingMessageBubble(text: unsavedReply.result.response.text, provider: unsavedReply.profile.name,
+                                               usage: unsavedReply.result.response.usage, requestID: unsavedReply.result.response.requestID,
+                                               badge: "unsaved", onFirstLayout: { alignRenderedReply(unsavedReply.diagnostics.id, in: proxy) })
+                            .id(unsavedReply.diagnostics.id)
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
-                .frame(maxWidth: 920, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onAppear { scrollToLatest(proxy, animated: false) }
-            .onChange(of: messages.count) { _, _ in scrollToLatest(proxy) }
-            .onChange(of: session.generation?.update?.text) { _, _ in scrollToLatest(proxy) }
-            .onChange(of: session.generation?.id) { _, _ in scrollToLatest(proxy) }
+            .padding(.vertical, 12)
+            .modifier(ChatColumn())
+            .onGeometryChange(for: TranscriptLayout.self) { geometry in
+                let height = geometry.size.height
+                let visibleEnd = geometry.bounds(of: .scrollView(axis: .vertical))?.maxY ?? height
+                return TranscriptLayout(height: height, visibleEnd: visibleEnd)
+            } action: { layout in
+                let previous = transcriptLayout
+                guard layout.height != previous?.height || layout.nearLatest != previous?.nearLatest else { return }
+                transcriptLayout = layout
+                // Follow the rendered reply while the reader is at the end, including large Markdown updates.
+                if let generation = session.generation, let previous, previous.nearLatest, layout.height > previous.height,
+                   layout.visibleEnd >= previous.height - TranscriptLayout.followDistance {
+                    proxy.scrollTo(generation.id, anchor: .bottom)
+                }
+            }
+        }
+        .clipped()
+        .task(id: latestReplyID) {
+            guard let latestReplyID else { return }
+            if let generation = session.generation, (generation.update?.text ?? "").isEmpty {
+                alignedReplyID = latestReplyID
+            }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            proxy.scrollTo(latestReplyID, anchor: .top)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func alignRenderedReply(_ id: UUID, in proxy: ScrollViewProxy) {
+        // A saved reply can first appear as a short bubble while its Markdown is being laid out.
+        guard id == latestReplyID, alignedReplyID != id else { return }
+        alignedReplyID = id
+        proxy.scrollTo(id, anchor: .top)
     }
 
     private func pendingUserBubble(_ request: String, filenames: [String], status: String = "sending") -> some View {
@@ -267,141 +292,31 @@ struct ClassChatView: View {
         .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WorkspacePalette.line) }
     }
 
-    private func generationBanner(_ generation: ChatSession.Generation) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "wand.and.stars")
-                .foregroundStyle(WorkspacePalette.accent)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(generation.phase.label)
-                    .font(.callout.weight(.semibold))
-                Text(generation.phase.detail)
-                    .font(.caption)
-                    .foregroundStyle(WorkspacePalette.muted)
-            }
-            Spacer(minLength: 10)
-            if let summary = usageLabel(generation.update?.usage) {
-                Text(summary)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(WorkspacePalette.muted)
-            }
-            Button("Stop", systemImage: "stop.circle.fill") { session.stop() }
-                .buttonStyle(.bordered)
-                .tint(.orange)
-                .keyboardShortcut(.escape, modifiers: [])
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(WorkspacePalette.tintSurface.opacity(0.45))
-        .overlay(alignment: .top) { Divider() }
-    }
-
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            if !session.uploads.isEmpty {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 8) {
-                        ForEach(session.uploads) { upload in
-                            HStack(spacing: 6) {
-                                Image(systemName: "doc")
-                                Text(upload.attachment.filename).lineLimit(1)
-                                Button {
-                                    session.uploads.removeAll { $0.id == upload.id }
-                                    if session.uploads.isEmpty { session.automaticallyFileUploads = false }
-                                } label: { Image(systemName: "xmark.circle.fill") }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Remove \(upload.attachment.filename)")
-                            }
-                            .font(.callout).padding(.horizontal, 9).padding(.vertical, 5)
-                            .background(WorkspacePalette.tintSurface, in: Capsule())
-                            .help(upload.contentDescription)
-                        }
-                    }
-                }.scrollIndicators(.hidden)
-                if !activeClassIDs.isEmpty {
-                    Toggle("Let the agent file these uploads in class materials", isOn: $session.automaticallyFileUploads)
-                        .toggleStyle(.checkbox).font(.caption)
-                        .help("Applies to files in this message and classes in this conversation.")
-                }
-            }
-            ZStack(alignment: .topLeading) {
-                if session.draft.isEmpty && !sending {
-                    Text(globalScope ? "Ask about your university context…" : "Ask about this class…")
-                        .foregroundStyle(WorkspacePalette.muted.opacity(0.85))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 14)
-                        .allowsHitTesting(false)
-                }
-                TextEditor(text: $session.draft)
-                    .font(.body)
-                    .scrollContentBackground(.hidden)
-                    .padding(8)
-                    .frame(minHeight: 76, maxHeight: 150)
-                    .disabled(sending)
-                    .accessibilityLabel("Chat message")
-            }
-            .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(sending ? WorkspacePalette.accent : WorkspacePalette.line, lineWidth: sending ? 1.5 : 1) }
+        VStack(alignment: .leading, spacing: 6) {
+            uploadControls
             statusRow
-            HStack(alignment: .center, spacing: 10) {
-                Button { choosingFiles = true } label: {
-                    Label("Attach Files…", systemImage: "paperclip").labelStyle(.iconOnly)
-                }
-                .buttonStyle(.borderless)
-                .help("Attach files to this message")
-                .accessibilityLabel("Attach files")
-                .disabled(sending || session.loadingFiles || unsavedReply != nil)
-                if session.loadingFiles { ProgressView().controlSize(.small) }
-                Menu {
-                    if profiles.isEmpty {
-                        Button("Add BYOK Provider…", systemImage: "key") { model.presentedEditor = .newBYOKProvider }
-                    }
-                    ForEach(profiles) { profile in
-                        Button {
-                            session.selectedProfileID = profile.id
-                        } label: {
-                            HStack {
-                                Text(profile.name)
-                                Spacer()
-                                Text(profile.model)
-                                    .foregroundStyle(WorkspacePalette.muted)
-                            }
-                        }
-                    }
-                } label: {
-                    Label(selectedProfile.map { "\($0.name) · \($0.model)" } ?? "Choose an agent",
-                          systemImage: "sparkles")
-                        .lineLimit(1)
-                }
-                .menuStyle(.borderlessButton)
-                .frame(maxWidth: 280, alignment: .leading)
-                .accessibilityLabel("Agent provider")
-                if session.status == nil {
-                    Text("⌘ Return to send")
-                        .font(.caption2)
-                        .foregroundStyle(WorkspacePalette.muted)
-                }
-                Spacer(minLength: 8)
-                if sending {
-                    Button("Stop", systemImage: "stop.fill") { session.stop() }
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                } else {
-                    Button("Send", systemImage: "arrow.up.circle.fill") {
-                        if let selectedProfile { session.send(in: model, using: selectedProfile) }
-                    }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(unsavedReply != nil || selectedProfile == nil || !session.canSend)
-                        .keyboardShortcut(.return, modifiers: [.command])
-                }
+            VStack(alignment: .leading, spacing: 4) {
+                draftEditor
+                composerToolbar.padding(.horizontal, 4)
+            }
+            .padding(8)
+            .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(composerFocused ? WorkspacePalette.accent : WorkspacePalette.line)
+                    .allowsHitTesting(false)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 10)
-        .padding(.bottom, 16)
-        .frame(maxWidth: 920, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
-        .overlay { if hoveringFiles { RoundedRectangle(cornerRadius: 12).strokeBorder(WorkspacePalette.accent, lineWidth: 2).allowsHitTesting(false) } }
+        .padding(.vertical, 8)
+        .modifier(ChatColumn())
+        .background(WorkspacePalette.canvas)
+        .overlay {
+            if hoveringFiles {
+                RoundedRectangle(cornerRadius: 12).strokeBorder(WorkspacePalette.accent, lineWidth: 2)
+                    .allowsHitTesting(false)
+            }
+        }
         .fileImporter(isPresented: $choosingFiles, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls): Task { await session.attach(urls) }
@@ -413,6 +328,118 @@ struct ClassChatView: View {
             Task { await session.attach(urls) }
             return true
         } isTargeted: { hoveringFiles = $0 }
+    }
+
+    @ViewBuilder private var uploadControls: some View {
+        if !session.uploads.isEmpty {
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(session.uploads) { upload in
+                        HStack(spacing: 6) {
+                            Image(systemName: "doc")
+                            Text(upload.attachment.filename).lineLimit(1)
+                            Button {
+                                session.uploads.removeAll { $0.id == upload.id }
+                                if session.uploads.isEmpty { session.automaticallyFileUploads = false }
+                            } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Remove \(upload.attachment.filename)")
+                        }
+                        .font(.callout).padding(.horizontal, 9).padding(.vertical, 5)
+                        .background(WorkspacePalette.tintSurface, in: Capsule())
+                        .help(upload.contentDescription)
+                    }
+                }
+            }.scrollIndicators(.hidden)
+            if !activeClassIDs.isEmpty {
+                Toggle("Let the agent file these uploads in class materials", isOn: $session.automaticallyFileUploads)
+                    .toggleStyle(.checkbox).font(.caption)
+                    .help("Applies to files in this message and classes in this conversation.")
+            }
+        }
+    }
+
+    private var draftEditor: some View {
+        // Measure wrapped text at the editor's width; the text view scrolls beyond five lines.
+        Text(verbatim: session.draft + "\u{200B}")
+            .font(.body)
+            .lineLimit(5)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, minHeight: 26, alignment: .topLeading)
+            .hidden()
+            .accessibilityHidden(true)
+            .overlay(alignment: .topLeading) {
+                TextEditor(text: $session.draft)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .focused($composerFocused)
+                    .disabled(sending)
+                    .accessibilityLabel("Chat message")
+                    .overlay(alignment: .topLeading) {
+                        if session.draft.isEmpty && !sending {
+                            Text(globalScope ? "Ask about your university context…" : "Ask about this class…")
+                                .font(.body)
+                                .foregroundStyle(WorkspacePalette.muted)
+                                .padding(.horizontal, 5)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
+            }
+    }
+
+    private var composerToolbar: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Button { choosingFiles = true } label: {
+                Label("Attach Files…", systemImage: "paperclip").labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .help("Attach files to this message")
+            .accessibilityLabel("Attach files")
+            .disabled(sending || session.loadingFiles || unsavedReply != nil)
+            if session.loadingFiles { ProgressView().controlSize(.small) }
+            Menu {
+                if profiles.isEmpty {
+                    Button("Add BYOK Provider…", systemImage: "key") { model.presentedEditor = .newBYOKProvider }
+                }
+                ForEach(profiles) { profile in
+                    Button {
+                        session.selectedProfileID = profile.id
+                    } label: {
+                        HStack {
+                            Text(profile.name)
+                            Spacer()
+                            Text(profile.model)
+                                .foregroundStyle(WorkspacePalette.muted)
+                        }
+                    }
+                }
+            } label: {
+                Label(selectedProfile.map { "\($0.name) · \($0.model)" } ?? "Choose an agent",
+                      systemImage: "sparkles")
+                    .lineLimit(1)
+            }
+            .menuStyle(.borderlessButton)
+            .frame(maxWidth: 280, alignment: .leading)
+            .accessibilityLabel("Agent provider")
+            Spacer(minLength: 8)
+            if sending {
+                Button("Stop", systemImage: "stop.fill") { session.stop() }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                    .keyboardShortcut(.escape, modifiers: [])
+            } else {
+                Button("Send", systemImage: "arrow.up.circle.fill") {
+                    if let selectedProfile { session.send(in: model, using: selectedProfile) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(unsavedReply != nil || selectedProfile == nil || !session.canSend)
+                .keyboardShortcut(.return, modifiers: [.command])
+                .help("Send message (⌘Return)")
+            }
+        }
     }
 
     @ViewBuilder private var statusRow: some View {
@@ -504,16 +531,6 @@ struct ClassChatView: View {
         }
     }
 
-    private func scrollToLatest(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        withAnimation(animated ? .easeOut(duration: 0.2) : nil) {
-            if sending || unsavedReply != nil {
-                proxy.scrollTo(streamingBubbleID, anchor: .bottom)
-            } else if let last = messages.last {
-                proxy.scrollTo(last.id, anchor: .bottom)
-            }
-        }
-    }
-
     private func elapsedLabel(at interval: TimeInterval) -> String {
         let seconds = max(0, Int(interval.rounded(.down)))
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
@@ -532,12 +549,26 @@ struct ClassChatView: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    private func usageLabel(_ usage: TokenUsage?) -> String? { Self.usageLabel(usage) }
-
     private static func compactNumber(_ value: Int) -> String {
         if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
         if value >= 1_000 { return String(format: "%.1fk", Double(value) / 1_000) }
         return "\(value)"
+    }
+}
+
+private struct TranscriptLayout: Equatable {
+    static let followDistance: CGFloat = 24
+    let height: CGFloat
+    let visibleEnd: CGFloat
+    var nearLatest: Bool { height - visibleEnd <= Self.followDistance }
+}
+
+private struct ChatColumn: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: 920, alignment: .leading)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity)
     }
 }
 
@@ -567,6 +598,7 @@ private struct StreamingMessageBubble: View {
     let usage: TokenUsage?
     let requestID: String?
     var badge = "live"
+    let onFirstLayout: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -595,7 +627,7 @@ private struct StreamingMessageBubble: View {
                         .foregroundStyle(WorkspacePalette.muted)
                 }
             } else {
-                AgentOutputView(source: text)
+                AgentOutputView(source: text, onFirstLayout: onFirstLayout)
             }
             if let requestID, !requestID.isEmpty {
                 Text("Request \(requestID)")
@@ -615,6 +647,7 @@ private struct ChatMessageBubble: View {
     let threadID: UUID?
     let message: ChatMessage
     let openCitation: (SourceCitation) -> Void
+    let onFirstLayout: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -634,7 +667,7 @@ private struct ChatMessageBubble: View {
                 }
             }
             if message.role == .assistant {
-                AgentOutputView(source: message.content)
+                AgentOutputView(source: message.content, onFirstLayout: onFirstLayout)
             } else {
                 if !message.content.isEmpty { Text(verbatim: message.content).textSelection(.enabled) }
                 if let threadID {
