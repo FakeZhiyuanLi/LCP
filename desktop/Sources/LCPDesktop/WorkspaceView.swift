@@ -625,22 +625,16 @@ struct ClassContextView: View {
                 }
                 if enrollment.archived { Label("Archived", systemImage: "archivebox").font(.caption) }
                 Spacer(minLength: 4)
-                Menu {
+                Menu("Class actions") {
                     ClassMenuItems(model: model, enrollment: enrollment, includeOpen: false)
-                } label: {
-                    HStack(spacing: 6) {
-                        Text("Class actions")
-                        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
-                    }
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10).frame(height: 26)
-                    .background(.black.opacity(0.22), in: Capsule())
-                    .overlay { Capsule().strokeBorder(.white.opacity(0.4)).allowsHitTesting(false) }
-                    .contentShape(Capsule())
                 }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .accessibilityLabel("Class actions").help("Class actions")
+                .menuStyle(.borderlessButton)
+                .foregroundStyle(WorkspacePalette.ink)
+                .tint(WorkspacePalette.accent)
+                .fixedSize()
+                .padding(.horizontal, 10).frame(height: 26)
+                .background(WorkspacePalette.surface, in: Capsule())
+                .overlay { Capsule().strokeBorder(WorkspacePalette.line).allowsHitTesting(false) }
             }
             if selectedTab != .chat {
                 Text(enrollment.title)

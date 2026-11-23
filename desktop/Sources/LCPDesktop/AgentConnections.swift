@@ -488,8 +488,11 @@ struct ProposalReviewView: View {
                 }
                 Spacer(); Toggle("Show Reviewed", isOn: $includeReviewed).toggleStyle(.checkbox)
             }
-            if proposals.isEmpty { ContentUnavailableView("No Proposals to Review", systemImage: "checkmark.bubble", description: Text("A connection with proposal permission can suggest a note or study log. You can also manually save a selected agent answer in class history.")) }
-            else {
+            if proposals.isEmpty {
+                ContentUnavailableView("No Proposals to Review", systemImage: "checkmark.bubble", description: Text("A connection with proposal permission can suggest a note or study log. You can also manually save a selected agent answer in class history."))
+                    .frame(maxWidth: .infinity)
+                    .workspacePanel()
+            } else {
                 List(proposals) { proposal in
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {

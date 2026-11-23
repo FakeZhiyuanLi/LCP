@@ -44,7 +44,10 @@ struct LectureLibraryView: View {
                     Text(recording.classID == nil ? "Unassigned · review class association" : recording.status.processing).font(.caption).foregroundStyle(recording.classID == nil ? Color.orange : Color.secondary)
                     Text(recording.status.transcriptAvailable == "available" || recording.status.transcriptAvailable == "yes" ? "Transcript available" : "Content: \(recording.status.transcriptAvailable)").font(.caption2).foregroundStyle(.secondary)
                 }.padding(.vertical, 8).tag(recording.id)
-            }.frame(minWidth: 210, idealWidth: 280, maxWidth: 380, minHeight: 0, maxHeight: .infinity)
+            }
+            .scrollContentBackground(.hidden)
+            .frame(minWidth: 210, idealWidth: 280, maxWidth: 380, minHeight: 0, maxHeight: .infinity)
+            .workspacePanel()
             VStack {
                 if let selected = recordings.first(where: { $0.id == selectedRecordingID }) {
                     LectureDetailView(model: model, recording: selected, viewingClassID: classID).id(selected.id)
