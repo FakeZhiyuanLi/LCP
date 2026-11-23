@@ -96,7 +96,7 @@ struct MaterialLibraryView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
         .sheet(item: $courseworkReview) { CourseworkReviewView(model: model, review: $0) }
     }
 
