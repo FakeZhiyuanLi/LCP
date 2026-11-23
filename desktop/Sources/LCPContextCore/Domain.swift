@@ -535,6 +535,7 @@ public struct ChatMessage: Codable, Equatable, Identifiable, Sendable {
 
 /// A durable conversation. A nil classID represents the university-wide thread.
 public struct ChatThread: Codable, Equatable, Identifiable, Sendable {
+    public static let maximumTitleBytes = 256
     public var id: UUID
     public var classID: UUID?
     public var title: String

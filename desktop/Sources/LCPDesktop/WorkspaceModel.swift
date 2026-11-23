@@ -6,6 +6,15 @@ import LCPClient
 import LCPContextCore
 import LCPContextServices
 
+struct UnsavedChatReply {
+    let question: String
+    let result: ClassPlanResult
+    let profile: AgentProviderProfile
+    let diagnostics: AgentRequestDiagnostics
+    let reason: String
+    let errorDetails: String
+}
+
 @MainActor
 final class WorkspaceModel: ObservableObject {
     @Published var state = ContextState()
@@ -64,7 +73,9 @@ final class WorkspaceModel: ObservableObject {
     private var canvasSyncTask: Task<Void, Never>?
     private var canvasSyncLastAttempt: Date?
     private var captureSubscriptions = Set<AnyCancellable>()
-    @Published var rootURL: URL
+    @Published var rootURL: URL {
+        didSet { if rootURL != oldValue { unsavedChatReplies.removeAll() } }
+    }
     private let usesPersistentProfilePreference: Bool
     private var lastImportedFeedIndex: Data?
     private var lastAttemptedFeedIndex: Data?
@@ -647,6 +658,7 @@ final class WorkspaceModel: ObservableObject {
 
     @Published var plannerClassID: UUID?
     @Published var chatClassID: UUID?
+    @Published private(set) var unsavedChatReplies: [UUID?: UnsavedChatReply] = [:]
 
     func openClassChat(for classID: UUID) {
         guard state.classes.contains(where: { $0.id == classID }) else { return }
@@ -666,9 +678,29 @@ final class WorkspaceModel: ObservableObject {
         (state.chatThreads ?? []).first { $0.classID == classID }
     }
 
-    @discardableResult
-    func saveChatTurn(classID: UUID?, message: String, response: String, profile: AgentProviderProfile,
-                      context: ClassPlannerContext, usage: TokenUsage? = nil) -> Bool {
+    func discardUnsavedChatReply(classID: UUID?) {
+        unsavedChatReplies.removeValue(forKey: classID)
+    }
+
+    func saveChatReply(classID: UUID?, question: String, result: ClassPlanResult, profile: AgentProviderProfile,
+                       diagnostics: AgentRequestDiagnostics) -> Bool {
+        diagnostics.chatStage(.save)
+        do {
+            try saveChatTurn(classID: classID, message: question, response: result.response.text, profile: profile,
+                             context: result.context, usage: result.response.usage, replyID: diagnostics.id)
+            unsavedChatReplies.removeValue(forKey: classID)
+            return true
+        } catch {
+            unsavedChatReplies[classID] = UnsavedChatReply(question: question, result: result, profile: profile,
+                                                          diagnostics: diagnostics, reason: error.localizedDescription,
+                                                          errorDetails: diagnostics.saveFailureDetails(error))
+            return false
+        }
+    }
+
+    private func saveChatTurn(classID: UUID?, message: String, response: String, profile: AgentProviderProfile,
+                              context: ClassPlannerContext, usage: TokenUsage?, replyID: UUID) throws {
+        guard let repository else { throw DesktopUIError.message("The library is unavailable.") }
         let request = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let reply = response.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedIDs = Set(context.classIDs)
@@ -680,46 +712,52 @@ final class WorkspaceModel: ObservableObject {
               classID.map({ context.classIDs == [$0] }) ?? true,
               context.classIDs.count <= 32,
               Set(context.classIDs).count == context.classIDs.count,
-              context.classIDs.allSatisfy({ id in state.classes.contains(where: { $0.id == id }) }),
               context.sourceCitations.allSatisfy({ selectedIDs.contains($0.classID) }),
               context.sourceCitations.count <= 128,
               usage.map({ [$0.inputTokens, $0.outputTokens, $0.totalTokens].compactMap { $0 }.allSatisfy { (0...100_000_000).contains($0) } }) ?? true else {
-            errorMessage = "The chat context is stale or invalid. Refresh it and try again."
-            return false
+            throw DesktopUIError.message("The message or its class context is outside the library’s limits.")
         }
         let now = Date.now
         let citations = context.sourceCitations
         let user = ChatMessage(role: .user, content: request, createdAt: now,
                                contextClassIDs: context.classIDs, contextRevision: context.repositoryRevision)
-        let assistant = ChatMessage(role: .assistant, content: reply, createdAt: now,
+        let assistant = ChatMessage(id: replyID, role: .assistant, content: reply, createdAt: now,
                                     agentIdentity: profile.name, citations: citations,
                                     contextClassIDs: context.classIDs, contextRevision: context.repositoryRevision,
                                     usage: usage)
-        var saved = false
-        mutate { state in
+        struct AlreadySaved: Error {}
+        func appendTurn(to state: inout ContextState) throws {
+            guard selectedIDs.isSubset(of: state.classes.map(\.id)) else {
+                throw DesktopUIError.message("A class used for this reply is no longer in the library.")
+            }
             var threads = state.chatThreads ?? []
             let index: Int
             if let existing = threads.firstIndex(where: { $0.classID == classID }) {
                 index = existing
+                if threads[index].messages.contains(where: { $0.id == replyID && $0.role == .assistant }) {
+                    throw AlreadySaved()
+                }
             } else {
                 let label: String
                 if let classID {
-                    label = state.classes.first(where: { $0.id == classID })?.shortLabel ?? "Class chat"
+                    let courseLabel = state.classes.first(where: { $0.id == classID })?.shortLabel ?? "Class chat"
+                    label = courseLabel.utf8.count <= ChatThread.maximumTitleBytes ? courseLabel : "Class chat"
                 } else {
                     label = "University chat"
                 }
-                threads.append(ChatThread(classID: classID, title: label))
+                threads.append(ChatThread(classID: classID, title: label, createdAt: now, updatedAt: now))
                 index = threads.index(before: threads.endIndex)
             }
             guard threads[index].messages.count <= 1_998 else {
                 throw DesktopUIError.message("This chat has reached its message limit. Start a new library backup before continuing.")
             }
             threads[index].messages.append(contentsOf: [user, assistant])
-            threads[index].updatedAt = now
+            threads[index].updatedAt = max(threads[index].updatedAt, now)
             state.chatThreads = threads
-            saved = true
         }
-        return saved
+        do { try repository.update(appendTurn) }
+        catch is AlreadySaved { /* The same reply was committed on a previous attempt. */ }
+        refresh()
     }
 
     func saveAgentPlan(classIDs: [UUID], objective: String, plan: String, profile: AgentProviderProfile,

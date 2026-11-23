@@ -39,6 +39,7 @@ struct ClassChatView: View {
     }
     private var thread: ChatThread? { model.chatThread(classID: classID) }
     private var messages: [ChatMessage] { thread?.messages ?? [] }
+    private var unsavedReply: UnsavedChatReply? { model.unsavedChatReplies[classID] }
 
     init(model: WorkspaceModel, classID: UUID) {
         self.model = model
@@ -54,7 +55,7 @@ struct ClassChatView: View {
 
     var body: some View {
         Group {
-            if profiles.isEmpty {
+            if profiles.isEmpty && unsavedReply == nil {
                 ScrollView {
                     VStack(spacing: 0) {
                         header
@@ -231,7 +232,7 @@ struct ClassChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    if messages.isEmpty && activeRequest == nil {
+                    if messages.isEmpty && activeRequest == nil && unsavedReply == nil {
                         VStack(alignment: .leading, spacing: 9) {
                             Label(globalScope ? "Start your university conversation" : "Start your class conversation", systemImage: "sparkles")
                                 .font(.headline)
@@ -258,6 +259,12 @@ struct ClassChatView: View {
                             StreamingMessageBubble(text: streamingText, provider: selectedProfile?.name ?? "Agent",
                                                    usage: streamingUsage, requestID: streamingRequestID)
                                 .id(streamingBubbleID)
+                        } else if let unsavedReply {
+                            pendingUserBubble(unsavedReply.question, status: "unsaved")
+                            StreamingMessageBubble(text: unsavedReply.result.response.text, provider: unsavedReply.profile.name,
+                                                   usage: unsavedReply.result.response.usage, requestID: unsavedReply.result.response.requestID,
+                                                   badge: "unsaved")
+                                .id(streamingBubbleID)
                         }
                     }
                 }
@@ -273,14 +280,14 @@ struct ClassChatView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func pendingUserBubble(_ request: String) -> some View {
+    private func pendingUserBubble(_ request: String, status: String = "sending") -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 7) {
                 Image(systemName: "person.fill")
                     .font(.caption.weight(.semibold))
                 Text("You")
                     .font(.caption.weight(.semibold))
-                Text("sending")
+                Text(status)
                     .font(.caption2)
                     .foregroundStyle(WorkspacePalette.muted)
             }
@@ -381,7 +388,7 @@ struct ClassChatView: View {
                 } else {
                     Button("Send", systemImage: "arrow.up.circle.fill") { send() }
                         .buttonStyle(.borderedProminent)
-                        .disabled(activeClassIDs.isEmpty || selectedProfile == nil || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(unsavedReply != nil || activeClassIDs.isEmpty || selectedProfile == nil || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .keyboardShortcut(.return, modifiers: [.command])
                 }
             }
@@ -395,7 +402,29 @@ struct ClassChatView: View {
     }
 
     @ViewBuilder private var statusRow: some View {
-        if let status {
+        if let unsavedReply {
+            VStack(alignment: .leading, spacing: 5) {
+                Label(unsavedReply.reason, systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.orange)
+                HStack {
+                    Button("Retry Save") {
+                        saveReply(unsavedReply.question, result: unsavedReply.result,
+                                  profile: unsavedReply.profile, diagnostics: unsavedReply.diagnostics)
+                    }
+                    Button("Copy Reply") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(unsavedReply.result.response.text, forType: .string)
+                    }
+                    Button("Copy Error Details") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(unsavedReply.errorDetails, forType: .string)
+                    }
+                    Button("Discard Unsaved Reply", role: .destructive) {
+                        model.discardUnsavedChatReply(classID: classID)
+                    }
+                }.controlSize(.small)
+            }
+        } else if let status {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Label(status, systemImage: "exclamationmark.circle")
                     .font(.caption)
@@ -471,7 +500,7 @@ struct ClassChatView: View {
     }
 
     private func send() {
-        guard generationTask == nil, let repository = model.repository, let profile = selectedProfile else { return }
+        guard generationTask == nil, unsavedReply == nil, let repository = model.repository, let profile = selectedProfile else { return }
         let ids = activeClassIDs
         errorDetails = nil
         guard !ids.isEmpty else {
@@ -534,15 +563,8 @@ struct ClassChatView: View {
                             self.streamingRequestID = update.requestID
                         }
                     })
-                guard activeGenerationID == generationID else { return }
-                diagnostics.chatStage(.save)
-                guard model.saveChatTurn(classID: classID, message: request, response: result.response.text,
-                                         profile: profile, context: result.context, usage: result.response.usage) else {
-                    draft = request
-                    reportFailure("LCP received the reply but could not save this turn.", stage: .save, diagnostics: diagnostics)
-                    return
-                }
-                context = result.context
+                guard activeGenerationID == generationID, model.repository === repository else { return }
+                saveReply(request, result: result, profile: profile, diagnostics: diagnostics)
             } catch is CancellationError {
                 guard activeGenerationID == generationID else { return }
                 draft = request
@@ -557,6 +579,13 @@ struct ClassChatView: View {
         }
     }
 
+    private func saveReply(_ request: String, result: ClassPlanResult, profile: AgentProviderProfile,
+                           diagnostics: AgentRequestDiagnostics) {
+        if model.saveChatReply(classID: classID, question: request, result: result, profile: profile, diagnostics: diagnostics) {
+            context = result.context
+        }
+    }
+
     private func cancelGeneration() {
         guard sending else { return }
         generationPhase = .cancelling
@@ -564,7 +593,7 @@ struct ClassChatView: View {
     }
 
     private func scrollToLatest(_ proxy: ScrollViewProxy) {
-        if activeRequest != nil {
+        if activeRequest != nil || unsavedReply != nil {
             withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(streamingBubbleID, anchor: .bottom) }
         } else if let last = messages.last {
             withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
@@ -631,6 +660,7 @@ private struct StreamingMessageBubble: View {
     let provider: String
     let usage: TokenUsage?
     let requestID: String?
+    var badge = "live"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -639,7 +669,7 @@ private struct StreamingMessageBubble: View {
                     .font(.caption.weight(.semibold))
                 Text(provider)
                     .font(.caption.weight(.semibold))
-                Text("live")
+                Text(badge)
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(WorkspacePalette.accent)
                     .padding(.horizontal, 6)

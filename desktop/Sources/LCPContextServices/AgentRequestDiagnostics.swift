@@ -1,4 +1,5 @@
 import Foundation
+import LCPContextCore
 import OSLog
 import os
 
@@ -70,6 +71,20 @@ public struct AgentRequestDiagnostics: Sendable {
         if let error { lines.append("Reason: \(error.diagnosticCode)") }
         lines.append(contentsOf: trace.withLock { $0.details })
         return lines.joined(separator: "\n")
+    }
+
+    public func saveFailureDetails(_ error: Error) -> String {
+        let reason: String
+        switch error {
+        case ContextRepositoryError.invalidState("chat thread metadata is invalid"): reason = "chat_thread_metadata"
+        case ContextRepositoryError.invalidState: reason = "library_validation"
+        case ContextRepositoryError.invalidPayload: reason = "invalid_payload"
+        case ContextRepositoryError.lockUnavailable: reason = "library_lock"
+        case let fileError as CocoaError: reason = "cocoa_\(fileError.errorCode)"
+        default: reason = "library_save"
+        }
+        Self.log.error("id=\(id.uuidString, privacy: .public) chat=save failed reason=\(reason, privacy: .public)")
+        return supportDetails(stage: .save) + "\nReason: \(reason)"
     }
 
     func sending(bodyBytes: Int, idle: TimeInterval, total: TimeInterval) {

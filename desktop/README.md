@@ -163,6 +163,9 @@ stream events arrived. When macOS supplies connection metrics, the report also
 includes DNS, connection and TLS timings and upload completion. AI requests allow
 two minutes of network inactivity and ten minutes in total. After a timeout your
 message returns to the composer. You can choose **Send** to retry.
+If the provider finishes but the library cannot save the reply, the conversation
+keeps it in memory while LCP is open. **Retry Save** writes that same reply
+locally. **Copy Reply** copies it to the clipboard.
 Keys, URLs, class materials and chat text stay out of these diagnostics.
 To look up an attempt in Mac Terminal, replace `PASTE-ID-HERE`
 with the copied diagnostic ID.

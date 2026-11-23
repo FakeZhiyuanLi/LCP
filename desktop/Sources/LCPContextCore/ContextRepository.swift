@@ -831,7 +831,7 @@ public final class ContextRepository {
         for thread in chatThreads {
             guard thread.classID.map(classIDs.contains) ?? true,
                   !thread.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  thread.title.utf8.count <= 256,
+                  thread.title.utf8.count <= ChatThread.maximumTitleBytes,
                   thread.messages.count <= 2_000,
                   thread.createdAt.timeIntervalSinceReferenceDate.isFinite,
                   thread.updatedAt.timeIntervalSinceReferenceDate.isFinite,
