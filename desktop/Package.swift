@@ -19,5 +19,6 @@ let package = Package(
         .testTarget(name: "LCPContextCoreTests", dependencies: ["LCPContextCore"]),
         .testTarget(name: "LCPContextServicesTests", dependencies: ["LCPContextCore", "LCPContextServices"]),
         .testTarget(name: "LCPAgentBridgeTests", dependencies: ["LCPContextCore", "LCPContextServices", "LCPAgentBridge"]),
+        .testTarget(name: "LCPDesktopTests", dependencies: ["LCPDesktop", "LCPContextServices"]),
     ]
 )

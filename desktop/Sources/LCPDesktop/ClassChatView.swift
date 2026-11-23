@@ -6,6 +6,9 @@ struct ClassChatView: View {
     @ObservedObject var model: WorkspaceModel
     let classID: UUID?
     let globalScope: Bool
+    var loadProfiles: @MainActor (URL) async throws -> [AgentProviderProfile] = { root in
+        try await AgentProviderCredentials.forLibrary(root).profilesListAsync()
+    }
 
     @State private var profiles: [AgentProviderProfile] = []
     @State private var selectedProfileID: UUID?
@@ -69,8 +72,10 @@ struct ClassChatView: View {
                 }
             }
         }
+        // The split view measures its detail at narrow widths. Let the chat
+        // fit the pane even when its wrapped text reports a tall minimum.
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
         .background(WorkspacePalette.canvas)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             refreshProfiles()
         }
@@ -392,10 +397,10 @@ struct ClassChatView: View {
 
     private func refreshProfiles() {
         profileTask?.cancel()
-        let credentials = credentials
+        let root = model.rootURL
         profileTask = Task { @MainActor in
             do {
-                let values = try await credentials.profilesListAsync().filter(\.enabled)
+                let values = try await loadProfiles(root).filter(\.enabled)
                 guard !Task.isCancelled else { return }
                 profiles = values
                 if selectedProfileID == nil || !profiles.contains(where: { $0.id == selectedProfileID }) {

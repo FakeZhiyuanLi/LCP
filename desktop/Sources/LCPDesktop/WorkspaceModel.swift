@@ -125,8 +125,7 @@ final class WorkspaceModel: ObservableObject {
         "LCPDesktop.canvasSyncLastRun.\(root.standardizedFileURL.path)"
     }
 
-    init() {
-        let arguments = ProcessInfo.processInfo.arguments
+    init(arguments: [String] = ProcessInfo.processInfo.arguments) {
         usesPersistentProfilePreference = !arguments.contains("--profile-root") && !arguments.contains("--demo") && ProcessInfo.processInfo.environment["LCP_DESKTOP_ROOT"] == nil
         if let index = arguments.firstIndex(of: "--profile-root"), arguments.indices.contains(index + 1) {
             rootURL = URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
