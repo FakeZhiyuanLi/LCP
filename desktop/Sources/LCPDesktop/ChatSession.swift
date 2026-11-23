@@ -103,7 +103,8 @@ final class ChatSession: ObservableObject {
         let providers = model.chatProviders
         let diagnostics = AgentRequestDiagnostics()
         let id = diagnostics.id
-        generation = Generation(id: id, question: question, providerName: profile.name, filenames: files.map(\.attachment.filename))
+        let local = ClassPlannerService.isLocalAcknowledgment(question, uploads: files)
+        generation = Generation(id: id, question: question, providerName: local ? "LCP" : profile.name, filenames: files.map(\.attachment.filename))
         draft = ""
         uploads = []
         automaticallyFileUploads = true
@@ -118,8 +119,8 @@ final class ChatSession: ObservableObject {
             do {
                 await Task.yield()
                 try Task.checkCancellation()
-                diagnostics.chatStage(stage)
-                let key = try await providers.apiKey(root, profile)
+                if !local { diagnostics.chatStage(stage) }
+                let key = local ? "" : try await providers.apiKey(root, profile)
                 try Task.checkCancellation()
                 stage = .generation
                 let result = try await ClassPlannerService(repository: repository, http: providers.http).generateChatStream(

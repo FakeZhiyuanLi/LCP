@@ -144,8 +144,10 @@ survive relaunch, library backup, and restore.
 
 Use the paperclip or drag files from Finder onto the conversation or message box. You can send a file on
 its own or include a question. A message can carry eight files totaling 32 MiB.
-Your provider receives document text or, for supported images, PDFs and Office
-documents, the file itself. Other formats can be kept as originals in the chat.
+LCP sends relevant excerpts from searchable documents, including PDFs. For a
+new image, scanned PDF or supported Office document without extracted text,
+it sends the original file. To ask the provider to inspect an earlier image
+or scan again, mention its filename or reattach it.
 Long messages are sent in full, subject to your provider’s context window.
 
 For reusable sources, the agent can suggest a title and a destination class.
@@ -154,10 +156,13 @@ new message. Turn it off before sending to review the suggestions and choose
 **Save** yourself.
 The file menu also lets you choose a class or save a copy to your Mac.
 
-Before each reply, LCP rebuilds a bounded snapshot from the selected scope. The
-snapshot can include saved materials, reviewed coursework, class history, and
-accepted lecture transcripts. Raw audio, provider keys, connection grants, and
-classes outside the selected scope are excluded. Assistant replies retain the
+For a question, LCP selects up to 24 KiB of class context and 8 KiB of recent
+dialogue. The class context can include passages from saved materials, reviewed
+coursework, class history, and accepted lecture transcripts. Text attachments
+have a shared excerpt budget of 16 KiB for new uploads and 8 KiB for earlier
+uploads. A standalone “thanks” receives a local reply labeled **LCP** with
+zero provider tokens. Raw lecture audio, provider keys, connection grants, and
+classes outside the selected scope are excluded from library context. Assistant replies retain the
 provider identity, library revision, and exact immutable source citations used
 for that turn. Select a source under **Sources** to open the saved revision in
 LCP's reader.

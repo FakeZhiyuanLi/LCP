@@ -225,6 +225,15 @@ public final class RetrievalService {
     }
 
     public func search(_ query: ContextQuery, grantID: UUID? = nil) throws -> ContextSearchPage {
+        try search(query, grantID: grantID, rankForChat: false)
+    }
+
+    func chatPassages(classIDs: [UUID], terms: [String]) throws -> ContextSearchPage {
+        try search(ContextQuery(classIDs: classIDs, text: terms.joined(separator: " "), limit: 12),
+                   grantID: nil, rankForChat: true)
+    }
+
+    private func search(_ query: ContextQuery, grantID: UUID?, rankForChat: Bool) throws -> ContextSearchPage {
         guard !query.classIDs.isEmpty, query.classIDs.count <= 128, Set(query.classIDs).count == query.classIDs.count,
               query.text.utf8.count <= 4_096, (1...100).contains(query.limit), (0...100_000).contains(query.offset),
               query.materialIDs == nil || query.materialIDs!.count <= 1_000,
@@ -240,7 +249,10 @@ public final class RetrievalService {
         let tokens = Self.fold(query.text)
             .split(whereSeparator: { $0.isWhitespace }).map(String.init)
         guard tokens.count <= 32 else { throw ContextServiceError.invalidQuery }
-        var scored: [(score: Int, result: ContextSearchResult)] = []
+        typealias Hit = (score: Int, result: ContextSearchResult)
+        var scored: [Hit] = []
+        var chatHits: [UUID: [Hit]] = [:]
+        var total = 0
         var omissions: [String] = []
         func matchesTime(_ date: Date?) -> Bool {
             Self.matchesEventTime(date, eventFrom: query.eventFrom, eventUntil: query.eventUntil) &&
@@ -248,11 +260,30 @@ public final class RetrievalService {
         }
         func add(_ text: String, citation: SourceCitation, title: String, provenance: String, extractionState: String = "ready") {
             let haystack = Self.fold(title + "\n" + text)
-            guard tokens.allSatisfy({ haystack.contains($0) }) else { return }
-            let score = tokens.reduce(0) { result, token in result + min(100, haystack.components(separatedBy: token).count - 1) }
-            let excerpt = Self.excerpt(text, queryTokens: tokens)
-            scored.append((score, ContextSearchResult(citation: citation, title: title, excerpt: excerpt,
-                                                      provenance: provenance, sourceKind: citation.sourceKind, extractionState: extractionState)))
+            let matched = tokens.filter { haystack.contains($0) }
+            guard rankForChat ? (tokens.isEmpty || !matched.isEmpty) : matched.count == tokens.count else { return }
+            total += 1
+            let score: Int
+            if rankForChat {
+                // Cover distinct terms before using title matches to break ties.
+                let foldedTitle = Self.fold(title)
+                score = matched.count * 32 + matched.filter { foldedTitle.contains($0) }.count
+                if let hits = chatHits[citation.sourceID], hits.count == query.limit, let last = hits.last, last.score >= score {
+                    return
+                }
+            } else {
+                score = matched.reduce(0) { result, token in result + min(100, haystack.components(separatedBy: token).count - 1) }
+            }
+            let excerpt = Self.excerpt(text, queryTokens: matched)
+            let hit = (score, ContextSearchResult(citation: citation, title: title, excerpt: excerpt,
+                                                  provenance: provenance, sourceKind: citation.sourceKind, extractionState: extractionState))
+            if rankForChat {
+                var hits = chatHits[citation.sourceID] ?? []
+                let position = hits.firstIndex { $0.score < score } ?? hits.endIndex
+                hits.insert(hit, at: position)
+                if hits.count > query.limit { hits.removeLast() }
+                chatHits[citation.sourceID] = hits
+            } else { scored.append(hit) }
         }
         let materialService = MaterialService(repository: repository)
         for material in repository.state.materials where query.classIDs.contains(material.classID) && matchesTime(material.createdAt) {
@@ -307,13 +338,21 @@ public final class RetrievalService {
                 } catch { omissions.append("Recording \(recording.id.uuidString): exact transcript payload unavailable or invalid.") }
             }
         }
-        scored.sort {
-            if $0.score != $1.score { return $0.score > $1.score }
-            return Self.sortKey($0.result.citation) < Self.sortKey($1.result.citation)
+        if rankForChat {
+            // Among equally relevant passages, include a first passage from each source before taking more.
+            scored = chatHits.values.flatMap { $0.enumerated() }.sorted {
+                if $0.element.score != $1.element.score { return $0.element.score > $1.element.score }
+                if $0.offset != $1.offset { return $0.offset < $1.offset }
+                return Self.sortKey($0.element.result.citation) < Self.sortKey($1.element.result.citation)
+            }.map(\.element)
+        } else {
+            scored.sort {
+                if $0.score != $1.score { return $0.score > $1.score }
+                return Self.sortKey($0.result.citation) < Self.sortKey($1.result.citation)
+            }
         }
-        let total = scored.count
-        let end = min(total, query.offset + query.limit)
-        let results = query.offset < total ? scored[query.offset..<end].map(\.result) : []
+        let end = min(scored.count, query.offset + query.limit)
+        let results = query.offset < end ? scored[query.offset..<end].map(\.result) : []
         return ContextSearchPage(results: results, nextOffset: end < total ? end : nil, total: total,
                                  repositoryRevision: repository.state.revision, omissions: Array(omissions.prefix(200)))
     }
@@ -706,7 +745,7 @@ public final class RetrievalService {
         return substring
     }
 
-    private static func prefixUTF8(_ text: String, bytes limit: Int) -> String {
+    static func prefixUTF8(_ text: String, bytes limit: Int) -> String {
         guard text.utf8.count > limit else { return text }
         var bytes = Array(text.utf8.prefix(limit))
         while let last = bytes.last {
@@ -778,8 +817,7 @@ public final class RetrievalService {
         return nil
     }
 
-    private static func excerpt(_ text: String, queryTokens: [String]) -> String {
-        let limit = 2_048
+    static func excerpt(_ text: String, queryTokens: [String], limit: Int = 2_048) -> String {
         guard text.utf8.count > limit else { return text }
         guard let anchor = queryTokens.lazy.compactMap({ originalMatch($0, in: text) }).first else { return prefixUTF8(text, bytes: limit) }
         let bytes = text.utf8

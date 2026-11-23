@@ -1,4 +1,6 @@
 import Foundation
+import CoreGraphics
+import CoreText
 import os
 import XCTest
 import LCPContextCore
@@ -14,6 +16,7 @@ final class AgentProviderFixtureProtocol: URLProtocol, @unchecked Sendable {
     static var simulateTimeout: AgentTimeoutPhase?
     static var rejectedToolParameter: String?
     static var generationRequests = 0
+    static var requestSizes: [Int] = []
     static var filingFollowup: [String: Any]?
     static var firstRequest: [String: Any] = [:]
     static let partialReplyTimeout = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
@@ -29,6 +32,7 @@ final class AgentProviderFixtureProtocol: URLProtocol, @unchecked Sendable {
             Self.requestBody = object
         }
         Self.generationRequests += 1
+        Self.requestSizes.append(body?.count ?? 0)
         if Self.generationRequests == 1 { Self.firstRequest = Self.requestBody }
         if let param = Self.rejectedToolParameter, Self.requestBody["tools"] != nil {
             let response = HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: "HTTP/1.1",
@@ -117,6 +121,7 @@ final class AgentProviderClientTests: XCTestCase {
         AgentProviderFixtureProtocol.simulateTimeout = nil
         AgentProviderFixtureProtocol.rejectedToolParameter = nil
         AgentProviderFixtureProtocol.generationRequests = 0
+        AgentProviderFixtureProtocol.requestSizes = []
         AgentProviderFixtureProtocol.filingFollowup = nil
         AgentProviderFixtureProtocol.firstRequest = [:]
         AgentProviderFixtureProtocol.partialReplyTimeout.withLock { $0 = nil }
@@ -200,6 +205,8 @@ final class AgentProviderClientTests: XCTestCase {
         XCTAssertEqual(reply.response.text, "The orbital marker is 937.")
         XCTAssertEqual(reply.response.usage?.totalTokens, 37)
         let followupInputs = try XCTUnwrap(AgentProviderFixtureProtocol.requestBody["input"] as? [[String: Any]])
+        let followupParts = try XCTUnwrap(followupInputs.first?["content"] as? [[String: Any]])
+        XCTAssertFalse(followupParts.contains { $0["image_url"] != nil || $0["file_data"] != nil })
         XCTAssertEqual(followupInputs.filter { $0["type"] as? String == "function_call_output" }.count, 3)
         XCTAssertNil(AgentProviderFixtureProtocol.requestBody["tools"])
         let body = AgentProviderFixtureProtocol.firstRequest
@@ -223,6 +230,98 @@ final class AgentProviderClientTests: XCTestCase {
         _ = try await planner.generateChat(classIDs: [], history: history, message: "Other scope", profile: profile, apiKey: "fictional")
         let outside = try JSONSerialization.data(withJSONObject: AgentProviderFixtureProtocol.requestBody)
         XCTAssertFalse(String(decoding: outside, as: UTF8.self).contains("Fictional orbital marker 937."))
+        try picture.retain(in: repository)
+        let imageHistory = [ChatMessage(role: .user, content: "Inspect this figure", contextClassIDs: [course.id], attachments: [picture.attachment])]
+        _ = try await planner.generateChat(classIDs: [course.id], history: imageHistory, message: "When does campus open?",
+                                           profile: profile, apiKey: "fictional")
+        XCTAssertNotNil(AgentProviderFixtureProtocol.requestBody["input"] as? String)
+        _ = try await planner.generateChat(classIDs: [course.id], history: imageHistory, message: "Inspect Figure.png again",
+                                           profile: profile, apiKey: "fictional")
+        let imageMessages = try XCTUnwrap(AgentProviderFixtureProtocol.requestBody["input"] as? [[String: Any]])
+        let imageParts = try XCTUnwrap(imageMessages.first?["content"] as? [[String: Any]])
+        XCTAssertTrue(imageParts.contains { $0["image_url"] as? String == "data:image/png;base64," + imageData.base64EncodedString() })
+    }
+
+    @MainActor
+    func testTextbookHomeworkAndThanksBoundTheActualProviderRequests() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = try ContextRepository(rootURL: root)
+        let course = ClassEnrollment(title: "Fictional astronomy"), other = ClassEnrollment(title: "Fictional history")
+        try repository.update { $0.classes = [course, other] }
+        let url = root.appendingPathComponent("Orbit Atlas.pdf")
+        let marker = "Homework: observe the blue comet on Thursday."
+        let data = NSMutableData()
+        var rect = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let pdf = try XCTUnwrap(CGContext(consumer: XCTUnwrap(CGDataConsumer(data: data)), mediaBox: &rect, nil))
+        let font = CTFontCreateWithName("Helvetica" as CFString, 10, nil)
+        func line(_ text: String) -> CTLine {
+            CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.init(kCTFontAttributeName as String): font]))
+        }
+        let filler = line("A fictional observatory maps the changing positions of distant stars across our night sky.")
+        for page in 1...128 {
+            pdf.beginPDFPage(nil)
+            for row in 0..<28 {
+                pdf.textPosition = CGPoint(x: 25, y: 750 - row * 22)
+                CTLineDraw(page == 128 && row == 27 ? line(marker) : filler, pdf)
+            }
+            pdf.endPDFPage()
+        }
+        pdf.closePDF()
+        try (data as Data).write(to: url)
+        let upload = try ChatUpload.read(url)
+        let extractedSize = try XCTUnwrap(upload.document?.plainText.utf8.count)
+        XCTAssertGreaterThan(extractedSize, 250_000)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [AgentProviderFixtureProtocol.self]
+        let service = ClassPlannerService(repository: repository, http: .init(configuration: config))
+        let profile = AgentProviderProfile(name: "Fixture", baseURL: "https://provider.example/v1", model: "fixture")
+        let args = ["attachment_id": upload.id.uuidString, "class_id": course.id.uuidString, "title": "Orbit Atlas", "reason": "Course reading"]
+        let call = ["type": "function_call", "name": ChatFilingTool.name, "call_id": "call_atlas",
+                    "arguments": String(decoding: try JSONEncoder().encode(args), as: UTF8.self)]
+        AgentProviderFixtureProtocol.response = ["output_text": "I found the homework.", "output": [call]]
+        let result = try await service.generateChatStream(classIDs: [course.id], history: [], message: "Find the homework in this textbook.",
+            profile: profile, apiKey: "fixture", uploads: [upload]) { _ in }
+        XCTAssertEqual(AgentProviderFixtureProtocol.generationRequests, 1)
+        let items = try XCTUnwrap(AgentProviderFixtureProtocol.firstRequest["input"] as? [[String: Any]])
+        let parts = try XCTUnwrap(items.first?["content"] as? [[String: Any]])
+        XCTAssertTrue(parts.contains { ($0["text"] as? String)?.contains(marker) == true })
+        XCTAssertFalse(parts.contains { $0["file_data"] != nil })
+        let suggestion = try XCTUnwrap(result.response.filingSuggestions.first)
+        try upload.retain(in: repository)
+        var thread = ChatThread(classID: course.id, title: "Class chat")
+        thread.messages = [ChatMessage(role: .user, content: "Find the homework.", contextClassIDs: [course.id], attachments: [upload.attachment]),
+                           ChatMessage(role: .assistant, content: String(repeating: "earlier dialogue ", count: 8_000), contextClassIDs: [course.id])]
+        try repository.update { state in
+            XCTAssertTrue(ChatFilingTool.suggest(suggestion, in: &thread))
+            state.chatThreads = [thread]
+            try ChatFilingTool.file(upload.id, from: thread.id, to: course.id, in: &state)
+        }
+        let history = try XCTUnwrap(repository.state.chatThreads?.first?.messages)
+        AgentProviderFixtureProtocol.response = ["output_text": "Observe the comet."]
+        let homework = try await service.generateChat(classIDs: [course.id], history: history, message: "Thanks, when is the homework due?",
+            profile: profile, apiKey: "fixture")
+        let prompt = try XCTUnwrap(AgentProviderFixtureProtocol.requestBody["input"] as? String)
+        XCTAssertTrue(prompt.contains(marker))
+        XCTAssertFalse(prompt.contains("attachment_id"))
+        XCTAssertEqual(homework.context.sourceCitations.map(\.locator), [.page(128)])
+        XCTAssertTrue(try RetrievalService(repository: repository).resolve(XCTUnwrap(homework.context.sourceCitations.first)).text.contains(marker))
+        XCTAssertEqual(AgentProviderFixtureProtocol.generationRequests, 2)
+        XCTAssertTrue(AgentProviderFixtureProtocol.requestSizes.allSatisfy { (1..<32_768).contains($0) })
+        for ids in [[course.id], [course.id, other.id]] {
+            let thanks = try await service.generateChat(classIDs: ids, history: history, message: "thanks", profile: profile, apiKey: "")
+            let streamed = try await service.generateChatStream(classIDs: ids, history: history, message: "  Thank you!! ", profile: profile, apiKey: "") { _ in }
+            for reply in [thanks, streamed] {
+                XCTAssertTrue(reply.isLocalReply)
+                XCTAssertEqual(reply.response.usage, .init(inputTokens: 0, outputTokens: 0, totalTokens: 0))
+                XCTAssertTrue(reply.context.markdown.isEmpty)
+                XCTAssertTrue(reply.context.sourceCitations.isEmpty)
+            }
+        }
+        XCTAssertEqual(AgentProviderFixtureProtocol.generationRequests, 2)
+        print("Fictional textbook: \(extractedSize) extracted bytes; upload and homework request bytes: \(AgentProviderFixtureProtocol.requestSizes); acknowledgment requests: 0")
+        XCTAssertFalse(ClassPlannerService.isLocalAcknowledgment("thanks", uploads: [upload]))
+        XCTAssertFalse(ClassPlannerService.isLocalAcknowledgment("Thanks?", uploads: []))
     }
 
     func testGenerationRejectsInputAboveTotalTransportBudget() async throws {

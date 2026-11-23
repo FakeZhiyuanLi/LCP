@@ -7,6 +7,30 @@ import LCPContextServices
 
 @MainActor
 final class ChatNavigationTests: XCTestCase {
+    func testLocalThanksIsSavedInBothChatsWithoutReadingTheKey() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let profile = AgentProviderProfile(name: "Fictional provider", baseURL: "https://example.invalid", model: "fixture")
+        let providers = ChatProviders(apiKey: { _, _ in XCTFail("Local reply read the API key"); return "" })
+        let model = WorkspaceModel(arguments: ["--profile-root", root.path], chatProviders: providers)
+        model.canvasSyncInterval = .manual
+        let course = ClassEnrollment(title: "Fictional astronomy")
+        let repository = try XCTUnwrap(model.repository)
+        try repository.update { $0.classes.append(course) }
+        model.refresh()
+        for scope: UUID? in [course.id, nil] {
+            let session = model.chatSession(for: scope)
+            session.draft = "Thanks!"
+            session.send(in: model, using: profile)
+            try await waitFor("local reply saved") { session.generation == nil }
+            let messages = try XCTUnwrap(model.chatThread(classID: scope)?.messages)
+            XCTAssertEqual(messages.map(\.content), ["Thanks!", "You’re welcome!"])
+            XCTAssertEqual(messages.last?.agentIdentity, "LCP")
+            XCTAssertEqual(messages.last?.usage?.totalTokens, 0)
+            XCTAssertEqual(messages.last?.citations, [])
+        }
+    }
+
     func testDraftAndStreamingReplySurviveLeavingUniversityChat() async throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

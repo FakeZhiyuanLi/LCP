@@ -8,11 +8,12 @@ public struct ChatUpload: Equatable, Identifiable, Sendable {
     public let attachment: ChatAttachment
     let bytes: Data
     let extraction: Data?
-    let plainText: String?
+    let document: ExtractionDocument?
 
     public var contentDescription: String {
+        if document != nil { return "Relevant text from this file will be sent to your provider." }
         if ChatFileInput.nativePart(for: attachment) != nil { return "The attached file will be sent to your provider." }
-        return plainText == nil ? "Available for filing. Only the filename is sent for this format." : "The file’s extracted text will be sent to your provider."
+        return "Available for filing. Only the filename is sent for this format."
     }
 
     public static func read(_ url: URL, remainingBytes: Int = ChatAttachment.maximumBytes) throws -> Self {
@@ -34,7 +35,7 @@ public struct ChatUpload: Equatable, Identifiable, Sendable {
         }
         let file = ChatAttachment(filename: name, original: reference(bytes, mime),
                                   text: extraction.map { reference($0, "application/vnd.lcp.extracted+json") })
-        return Self(attachment: file, bytes: bytes, extraction: extraction, plainText: document?.plainText)
+        return Self(attachment: file, bytes: bytes, extraction: extraction, document: document)
     }
 
     @MainActor public func retain(in repository: ContextRepository) throws {

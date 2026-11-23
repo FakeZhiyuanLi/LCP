@@ -690,7 +690,7 @@ final class WorkspaceModel: ObservableObject {
                        diagnostics: AgentRequestDiagnostics, automaticallyFileUploads: Bool = false) -> Bool {
         diagnostics.chatStage(.save)
         do {
-            try saveChatTurn(classID: classID, message: question, response: result.response.text, profile: profile,
+            try saveChatTurn(classID: classID, message: question, response: result.response.text, agentIdentity: result.isLocalReply ? "LCP" : profile.name,
                              context: result.context, usage: result.response.usage, replyID: diagnostics.id,
                              uploads: result.uploads, suggestions: result.response.filingSuggestions, automaticallyFileUploads: automaticallyFileUploads)
             unsavedChatReplies.removeValue(forKey: classID)
@@ -703,7 +703,7 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
-    private func saveChatTurn(classID: UUID?, message: String, response: String, profile: AgentProviderProfile,
+    private func saveChatTurn(classID: UUID?, message: String, response: String, agentIdentity: String,
                               context: ClassPlannerContext, usage: TokenUsage?, replyID: UUID,
                               uploads: [ChatUpload], suggestions: [ChatFilingSuggestion], automaticallyFileUploads: Bool) throws {
         guard let repository else { throw DesktopUIError.message("The library is unavailable.") }
@@ -729,7 +729,7 @@ final class WorkspaceModel: ObservableObject {
                                contextClassIDs: context.classIDs, contextRevision: context.repositoryRevision,
                                attachments: uploads.isEmpty ? nil : uploads.map(\.attachment))
         let assistant = ChatMessage(id: replyID, role: .assistant, content: reply, createdAt: now,
-                                    agentIdentity: profile.name, citations: citations,
+                                    agentIdentity: agentIdentity, citations: citations,
                                     contextClassIDs: context.classIDs, contextRevision: context.repositoryRevision,
                                     usage: usage)
         struct AlreadySaved: Error {}

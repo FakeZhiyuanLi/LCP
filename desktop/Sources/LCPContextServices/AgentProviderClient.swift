@@ -268,13 +268,14 @@ public struct OpenAICompatibleAgentClient: Sendable {
             try Self.checkStatus(object)
             var displays = ProviderDisplayCalls()
             displays.response(object)
-            let parts = [Self.responseText(from: object) ?? "", displays.markdown()].filter { !$0.isEmpty }
+            let answerText = Self.responseText(from: object)
+            let parts = [answerText ?? "", displays.markdown()].filter { !$0.isEmpty }
             let suggestions = displays.filingSuggestions
             let text = parts.isEmpty && !suggestions.isEmpty ? ChatFilingTool.reply : parts.joined(separator: "\n\n")
             guard !text.isEmpty else { throw AgentProviderError.response(.noText) }
             let first = AgentProviderGenerationResult(text: text, requestID: object["id"] as? String,
                 usage: Self.usage(from: object["usage"] as? [String: Any]), filingSuggestions: suggestions)
-            guard !files.isEmpty, let continuation = displays.continuation else { return first }
+            guard !files.isEmpty, let continuation = displays.continuation(answered: answerText != nil) else { return first }
             let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maxOutputTokens,
                 stream: false, displayTools: false, files: files, continuation: continuation)
             let final = try await jsonResponse(endpoint: endpoint, host: host, body: body, diagnostics: diagnostics)
@@ -375,10 +376,11 @@ public struct OpenAICompatibleAgentClient: Sendable {
         ]
         if !files.isEmpty {
             let promptPart: [String: Any] = ["type": "input_text", "text": prompt]
-            var input: [[String: Any]] = [["role": "user", "content": [promptPart] + (try files.flatMap { try $0.parts() })]]
+            let parts = try files.flatMap { try $0.parts(includeOriginal: continuation == nil) }
+            var input: [[String: Any]] = [["role": "user", "content": [promptPart] + parts]]
             if let continuation {
                 input += try continuation.input(files: files)
-                payload["instructions"] = "The local filing tools have finished. Answer the student's original question using the attached data. Include the requested document details in your response. The student controls how filing suggestions are applied."
+                payload["instructions"] = "The filing tools have finished. Answer the student's question from the supplied excerpts, observations and tool results. If the requested detail is unavailable, say so. The student controls filing."
             }
             payload["input"] = input
         }
@@ -387,13 +389,15 @@ public struct OpenAICompatibleAgentClient: Sendable {
                 ["type": "function", "name": tool.rawValue, "description": tool.guidance,
                  "parameters": tool.inputSchema, "strict": false]
             }
+            var instructions = "Write readable Markdown. Use a display tool when a comparison or sequence would help the student. Use up to four visuals. Include explanations and citations in the same response. Each tool displays its graphic directly in LCP. Use known facts and clearly label estimates."
             if files.contains(where: { !$0.destinations.isEmpty && $0.file.savedMaterialID == nil }) {
                 payload["include"] = ["reasoning.encrypted_content"]
                 tools.append(["type": "function", "name": ChatFilingTool.name, "description": ChatFilingTool.guidance,
                               "parameters": ChatFilingTool.schema, "strict": false])
+                instructions += " Answer the student's question in the same response as any filing suggestion. Inspect supplied images and documents now. The original file is supplied only once."
             }
             payload["tools"] = tools
-            payload["instructions"] = "Write readable Markdown. Use a display tool when a comparison or sequence would help the student. Use up to four visuals. Include explanations and citations in the same response. Each tool displays its graphic directly in LCP. Use known facts and clearly label estimates."
+            payload["instructions"] = instructions
         }
         guard JSONSerialization.isValidJSONObject(payload) else { throw AgentProviderError.invalidConfiguration }
         let data = try JSONSerialization.data(withJSONObject: payload, options: [])

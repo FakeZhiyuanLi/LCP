@@ -37,8 +37,10 @@ struct ProviderFileContinuation: Equatable, Sendable {
                                 "output": String(decoding: try JSONEncoder().encode(result), as: UTF8.self)])
             }
         }
-        // Some compatible gateways omit call_id. Give those models the same local results as context.
-        if outputs.count != calls.count {
+        // In a stateless request, opaque reasoning or visual arguments can dwarf the filing receipt.
+        // A standalone receipt also works with gateways that omit call IDs.
+        let replayBytes = reasoning.reduce(0) { $0 + $1.count } + calls.reduce(0) { $0 + $1.arguments.utf8.count }
+        if outputs.count != calls.count || replayBytes > 8_192 {
             let results = String(decoding: try JSONEncoder().encode(receipts), as: UTF8.self)
             return [["role": "developer", "content": "Local LCP tool results: " + results]]
         }

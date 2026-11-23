@@ -71,7 +71,7 @@ struct ClassChatView: View {
         }
         .task(id: ObjectIdentifier(session)) { await refreshProfiles() }
         .onChange(of: model.state.revision) { _, _ in
-            guard !sending, session.context != nil else { return }
+            guard showingContext, !sending else { return }
             scheduleContextRefresh()
         }
         .onDisappear {
@@ -105,7 +105,7 @@ struct ClassChatView: View {
                 .popover(isPresented: $showingContext) {
                     contextSummary
                         .onAppear {
-                            if session.context == nil && !sending { scheduleContextRefresh() }
+                            if !sending { scheduleContextRefresh() }
                         }
                 }
         }
@@ -172,8 +172,8 @@ struct ClassChatView: View {
                     .disabled(loadingContext || sending || activeClassIDs.isEmpty)
             }
             Text(globalScope
-                 ? "Replies use saved sources from your active classes and any files you attach."
-                 : "Replies use saved sources from this class and any files you attach.")
+                 ? "Your question selects relevant passages from your active classes. Refresh to preview the class sources for your draft."
+                 : "Your question selects relevant passages from this class. Refresh to preview the class sources for your draft.")
                 .font(.callout)
                 .foregroundStyle(WorkspacePalette.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -251,7 +251,7 @@ struct ClassChatView: View {
                             .id(generation.id)
                     } else if let unsavedReply {
                         pendingUserBubble(unsavedReply.question, filenames: unsavedReply.result.uploads.map(\.attachment.filename), status: "unsaved")
-                        StreamingMessageBubble(text: unsavedReply.result.response.text, provider: unsavedReply.profile.name,
+                        StreamingMessageBubble(text: unsavedReply.result.response.text, provider: unsavedReply.result.isLocalReply ? "LCP" : unsavedReply.profile.name,
                                                usage: unsavedReply.result.response.usage, requestID: unsavedReply.result.response.requestID,
                                                badge: "unsaved", onFirstLayout: { alignRenderedReply(unsavedReply.diagnostics.id, in: proxy) })
                             .id(unsavedReply.diagnostics.id)
@@ -526,7 +526,8 @@ struct ClassChatView: View {
             await Task.yield()
             guard !Task.isCancelled else { return }
             do {
-                let prepared = try ClassPlannerService(repository: repository).makeContext(classIDs: ids)
+                let prepared = try ClassPlannerService(repository: repository).previewChatContext(classIDs: ids, message: session.draft,
+                                                                                                 history: messages, uploads: session.uploads)
                 guard !Task.isCancelled else { return }
                 session.context = .init(prepared)
                 if !sending { session.status = nil; session.errorDetails = nil }

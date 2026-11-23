@@ -155,6 +155,7 @@ struct ProviderStreamParser {
             throw AgentProviderError.response(events == 0 ? .unexpectedFormat : .incomplete)
         }
         if text.isEmpty, !finalParts.isEmpty { try append(finalParts.joined(separator: "\n\n")) }
+        let answered = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let graphics = displays.markdown()
         if !graphics.isEmpty { try append((text.isEmpty ? "" : "\n\n") + graphics) }
         let suggestions = displays.filingSuggestions
@@ -162,7 +163,7 @@ struct ProviderStreamParser {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentProviderError.response(.noText) }
         onUpdate(AgentProviderStreamUpdate(text: text, requestID: requestID, usage: usage, finished: true))
         var result = AgentProviderGenerationResult(text: text, requestID: requestID, usage: usage, filingSuggestions: suggestions)
-        result.fileContinuation = displays.continuation
+        result.fileContinuation = displays.continuation(answered: answered)
         return result
     }
 

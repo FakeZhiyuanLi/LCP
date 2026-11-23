@@ -13,11 +13,20 @@ struct ProviderDisplayCalls {
 
     private var calls: [Int: Call] = [:]
     private var reasoning: [Int: Data] = [:]
+    private var sawCommentary = false
+    private var sawFinalMessage = false
     private var overflow = false
     private static let limit = 4
     private static let unavailable = "LCP could not display one of the requested visuals."
 
     mutating func item(_ item: [String: Any], index: Int, complete: Bool) {
+        if item["type"] as? String == "message" {
+            switch item["phase"] as? String {
+            case "commentary": sawCommentary = true
+            case "final_answer": sawFinalMessage = true
+            default: break
+            }
+        }
         if complete, item["type"] as? String == "reasoning", reasoning.count < 8,
            let data = try? JSONSerialization.data(withJSONObject: item), data.count <= 262_144 {
             reasoning[index] = data
@@ -70,7 +79,8 @@ struct ProviderDisplayCalls {
         call.arguments = value
     }
 
-    var continuation: ProviderFileContinuation? {
+    func continuation(answered: Bool) -> ProviderFileContinuation? {
+        if answered && (!sawCommentary || sawFinalMessage) { return nil }
         guard calls.values.contains(where: { $0.name == ChatFilingTool.name }) else { return nil }
         let entries = calls.keys.sorted().compactMap { index -> ProviderFileContinuation.Call? in
             guard let call = calls[index], let name = call.name, !call.invalid else { return nil }
