@@ -523,9 +523,11 @@ struct ClassChatView: View {
                 stage = .generation
                 let result = try await ClassPlannerService(repository: repository).generateChatStream(
                     classIDs: ids, history: history, message: request, profile: profile, apiKey: key,
-                    diagnostics: diagnostics, onUpdate: { update in
+                    diagnostics: diagnostics, onRequestReady: {
+                        generationPhase = .waiting
+                    }, onUpdate: { update in
                         Task { @MainActor in
-                            guard self.activeGenerationID == generationID else { return }
+                            guard self.activeGenerationID == generationID, self.generationPhase != .cancelling else { return }
                             if !update.text.isEmpty { self.generationPhase = .streaming }
                             self.streamingText = update.text
                             self.streamingUsage = update.usage
@@ -599,6 +601,7 @@ struct ClassChatView: View {
 private enum GenerationPhase {
     case idle
     case preparing
+    case waiting
     case streaming
     case cancelling
 
@@ -606,6 +609,7 @@ private enum GenerationPhase {
         switch self {
         case .idle: return "Ready"
         case .preparing: return "Preparing context"
+        case .waiting: return "Waiting for provider"
         case .streaming: return "Writing response"
         case .cancelling: return "Stopping"
         }
@@ -615,6 +619,7 @@ private enum GenerationPhase {
         switch self {
         case .idle: return ""
         case .preparing: return "Reviewing the latest saved sources…"
+        case .waiting: return "LCP is waiting for the first part of the answer."
         case .streaming: return "The answer will appear here as it arrives."
         case .cancelling: return "Finishing the request safely…"
         }

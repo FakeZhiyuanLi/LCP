@@ -1,28 +1,51 @@
 import Foundation
+import os
 import XCTest
 import LCPContextCore
 @testable import LCPContextServices
 
-final class AgentProviderFixtureProtocol: URLProtocol {
+final class AgentProviderFixtureProtocol: URLProtocol, @unchecked Sendable {
     static var status = 200
     static var response: [String: Any] = ["id": "resp_fixture"]
     static var streamBody: Data?
     static var requestBody: [String: Any] = [:]
     static var authorization: String?
+    static var timeoutInterval: TimeInterval?
+    static var simulateTimeout: AgentTimeoutPhase?
+    static let partialReplyTimeout = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         Self.authorization = request.value(forHTTPHeaderField: "Authorization")
+        Self.timeoutInterval = request.timeoutInterval
         let body = request.httpBody ?? requestBodyStreamData(request.httpBodyStream)
         if let body,
            let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
             Self.requestBody = object
         }
+        if Self.simulateTimeout == .beforeHeaders {
+            client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
+            return
+        }
         let isStream = (Self.requestBody["stream"] as? Bool) == true
         let response = HTTPURLResponse(url: request.url!, statusCode: Self.status,
                                        httpVersion: "HTTP/1.1", headerFields: ["Content-Type": isStream ? "text/event-stream" : "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        if Self.simulateTimeout == .beforeBody {
+            client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
+            return
+        }
+        if Self.simulateTimeout == .duringBody {
+            // URLSession may discard queued partial data if the protocol fails in
+            // the same callback. Let the consumer trigger the timeout after a delta.
+            Self.partialReplyTimeout.withLock { action in
+                action = { [weak self] in
+                    guard let self else { return }
+                    self.client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
+                }
+            }
+        }
         if Self.status < 300 {
             if isStream, let streamBody = Self.streamBody {
                 let split = max(1, streamBody.count / 3)
@@ -37,7 +60,9 @@ final class AgentProviderFixtureProtocol: URLProtocol {
                 client?.urlProtocol(self, didLoad: body)
             }
         }
-        client?.urlProtocolDidFinishLoading(self)
+        if Self.simulateTimeout != .duringBody {
+            client?.urlProtocolDidFinishLoading(self)
+        }
     }
     override func stopLoading() {}
 
@@ -72,6 +97,9 @@ final class AgentProviderClientTests: XCTestCase {
         AgentProviderFixtureProtocol.streamBody = nil
         AgentProviderFixtureProtocol.requestBody = [:]
         AgentProviderFixtureProtocol.authorization = nil
+        AgentProviderFixtureProtocol.timeoutInterval = nil
+        AgentProviderFixtureProtocol.simulateTimeout = nil
+        AgentProviderFixtureProtocol.partialReplyTimeout.withLock { $0 = nil }
     }
 
     func testResponsesCheckUsesTheConfiguredModelAndDoesNotSendClassContext() async throws {
@@ -81,6 +109,7 @@ final class AgentProviderClientTests: XCTestCase {
         XCTAssertEqual(result.endpoint.absoluteString, "https://provider.example/v1/responses")
         XCTAssertEqual(result.requestID, "resp_fixture")
         XCTAssertEqual(AgentProviderFixtureProtocol.authorization, "Bearer fixture-key")
+        XCTAssertEqual(AgentProviderFixtureProtocol.timeoutInterval, 120)
         let payload = try JSONSerialization.jsonObject(with: OpenAICompatibleAgentClient.requestBody(model: "gpt-6.2-sol")) as? [String: Any]
         XCTAssertEqual(payload?["model"] as? String, "gpt-6.2-sol")
         XCTAssertEqual(payload?["store"] as? Bool, false)
@@ -124,6 +153,57 @@ final class AgentProviderClientTests: XCTestCase {
             XCTFail("Expected an input-size error")
         } catch let error as AgentProviderError {
             XCTAssertEqual(error, .inputTooLarge)
+        }
+    }
+
+    func testStreamingTimeoutReportsWhetherHeadersOrBodyArrivedWithoutLeakingContent() async throws {
+        let marker = "fictional-private"
+        let body = Data("data: {\"type\":\"response.output_text.delta\",\"delta\":\"\(marker)\"}\n\n".utf8)
+        AgentProviderFixtureProtocol.streamBody = body
+        for phase in [AgentTimeoutPhase.beforeHeaders, .beforeBody, .duringBody] {
+            AgentProviderFixtureProtocol.simulateTimeout = phase
+            let diagnostics = AgentRequestDiagnostics()
+            do {
+                _ = try await client(key: marker).generateStream(prompt: marker, diagnostics: diagnostics) { update in
+                    if !update.delta.isEmpty {
+                        let timeout = AgentProviderFixtureProtocol.partialReplyTimeout.withLock { $0 }
+                        timeout?()
+                    }
+                }
+                XCTFail("Expected a timeout")
+            } catch let error as AgentProviderError {
+                XCTAssertEqual(error, .timeout(phase))
+                let details = diagnostics.supportDetails(stage: .generation, error: error)
+                XCTAssertTrue(details.contains("Reason: network_-1001"))
+                XCTAssertTrue(details.contains("Elapsed: "))
+                XCTAssertTrue(details.contains("Timeouts: 120 s idle, 600 s total"))
+                XCTAssertTrue(details.contains(phase == .beforeHeaders ? "HTTP: no response headers" : "HTTP: 200 after "))
+                XCTAssertTrue(details.contains("Response body: \(phase == .duringBody ? body.count : 0) bytes"))
+                XCTAssertTrue(details.contains(phase == .duringBody ? "events=1" : "events=0"))
+                XCTAssertEqual(details.contains("Body timing:"), phase == .duringBody)
+                XCTAssertFalse(details.contains(marker))
+                XCTAssertFalse(details.contains("provider.example"))
+                XCTAssertFalse(error.localizedDescription.contains(marker))
+            }
+            XCTAssertEqual(AgentProviderFixtureProtocol.timeoutInterval, 120)
+        }
+    }
+
+    func testBufferedGenerationAndConnectionCheckPreserveTransportTimeouts() async throws {
+        AgentProviderFixtureProtocol.simulateTimeout = .beforeHeaders
+        let provider = try client()
+        do {
+            _ = try await provider.checkConnection()
+            XCTFail("Expected connection check timeout")
+        } catch let error as AgentProviderError {
+            XCTAssertEqual(error, .timeout(.beforeHeaders))
+        }
+        AgentProviderFixtureProtocol.simulateTimeout = .beforeBody
+        do {
+            _ = try await provider.generate(prompt: "fictional")
+            XCTFail("Expected generation timeout")
+        } catch let error as AgentProviderError {
+            XCTAssertEqual(error, .timeout(.beforeBody))
         }
     }
 

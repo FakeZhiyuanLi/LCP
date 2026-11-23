@@ -112,6 +112,7 @@ public final class ClassPlannerService {
     public func generateChatStream(classIDs: [UUID], history: [ChatMessage], message: String,
                                    profile: AgentProviderProfile, apiKey: String,
                                    maxContextBytes: Int = 1_000_000, diagnostics: AgentRequestDiagnostics = .init(),
+                                   onRequestReady: () -> Void = {},
                                    onUpdate: @escaping @Sendable (AgentProviderStreamUpdate) -> Void) async throws -> ClassPlanResult {
         let request = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !request.isEmpty, request.utf8.count <= 4_096,
@@ -123,6 +124,9 @@ public final class ClassPlannerService {
         let context = try makeContext(classIDs: classIDs, maxBytes: maxContextBytes)
         let prompt = Self.chatPrompt(classIDs: classIDs, history: history, message: request, context: context.markdown)
         let client = try OpenAICompatibleAgentClient(profile: profile, apiKey: apiKey, http: http)
+        try Task.checkCancellation()
+        diagnostics.chatStage(.generation)
+        onRequestReady()
         let response = try await client.generateStream(prompt: prompt, diagnostics: diagnostics, onUpdate: onUpdate)
         return ClassPlanResult(response: response, context: context)
     }

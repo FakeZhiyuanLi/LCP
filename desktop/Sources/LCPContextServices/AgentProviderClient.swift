@@ -135,6 +135,10 @@ public enum AgentResponseIssue: String, Sendable {
     }
 }
 
+public enum AgentTimeoutPhase: Sendable {
+    case beforeHeaders, beforeBody, duringBody
+}
+
 public enum AgentProviderError: LocalizedError, Equatable, Sendable {
     case invalidConfiguration
     case invalidCredential
@@ -143,6 +147,7 @@ public enum AgentProviderError: LocalizedError, Equatable, Sendable {
     case unsupportedProvider
     case invalidResponse
     case response(AgentResponseIssue)
+    case timeout(AgentTimeoutPhase)
     case network(Int)
     case requestFailed
     case http(Int)
@@ -157,6 +162,7 @@ public enum AgentProviderError: LocalizedError, Equatable, Sendable {
         case .invalidResponse: return "invalidResponse"
         case .response(let issue): return issue.rawValue
         case .requestFailed: return "requestFailed"
+        case .timeout: return "network_\(URLError.timedOut.rawValue)"
         case .network(let code): return "network_\(code)"
         case .http(let code): return "http_\(code)"
         }
@@ -176,6 +182,12 @@ public enum AgentProviderError: LocalizedError, Equatable, Sendable {
         case .invalidResponse:
             return "The provider returned an unexpected response. Check the endpoint and model."
         case .response(let issue): return issue.message
+        case .timeout(.beforeHeaders):
+            return "LCP timed out waiting for the provider to respond. You can try again."
+        case .timeout(.beforeBody):
+            return "The provider responded, but LCP timed out waiting for the reply to begin. You can try again."
+        case .timeout(.duringBody):
+            return "LCP received part of the reply before the request timed out. You can try again."
         case .requestFailed, .network:
             return "LCP could not reach the provider. Check the network and endpoint."
         case .http(401):
@@ -212,16 +224,28 @@ public struct OpenAICompatibleAgentClient: Sendable {
         return (base.appendingPathComponent("responses"), host)
     }
 
+    private func jsonResponse(endpoint: URL, host: String, body: Data,
+                              diagnostics: AgentRequestDiagnostics) async throws -> [String: Any] {
+        let chunks = try http.postProviderJSON(endpoint, body: body, bearer: apiKey, host: host,
+                                               stream: false, limit: 65_536, diagnostics: diagnostics)
+        var data = Data()
+        for try await chunk in chunks {
+            try Task.checkCancellation()
+            data.append(chunk)
+        }
+        try Task.checkCancellation()
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AgentProviderError.response(.malformedJSON)
+        }
+        return object
+    }
+
     public func checkConnection() async throws -> AgentProviderCheckResult {
         let diagnostics = AgentRequestDiagnostics()
         return try await diagnostics.run(.connectionCheck) {
             let (endpoint, host) = try destination()
             let body = try Self.requestBody(model: profile.model)
-            let (data, response) = try await http.postJSONResponse(endpoint, body: body, bearer: apiKey, host: host)
-            diagnostics.received(response)
-            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw AgentProviderError.response(.malformedJSON)
-            }
+            let object = try await jsonResponse(endpoint: endpoint, host: host, body: body, diagnostics: diagnostics)
             // This tiny probe may legitimately exhaust its eight-token budget.
             do { try Self.checkStatus(object) } catch AgentProviderError.response(.tokenLimit) { }
             guard object["id"] is String || Self.responseText(from: object) != nil else {
@@ -236,11 +260,7 @@ public struct OpenAICompatibleAgentClient: Sendable {
         return try await diagnostics.run(.generate) {
             let (endpoint, host) = try destination()
             let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maxOutputTokens)
-            let (data, response) = try await http.postJSONResponse(endpoint, body: body, bearer: apiKey, host: host)
-            diagnostics.received(response)
-            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw AgentProviderError.response(.malformedJSON)
-            }
+            let object = try await jsonResponse(endpoint: endpoint, host: host, body: body, diagnostics: diagnostics)
             try Self.checkStatus(object)
             guard let text = Self.responseText(from: object), !text.isEmpty else {
                 throw AgentProviderError.response(.noText)
@@ -256,8 +276,8 @@ public struct OpenAICompatibleAgentClient: Sendable {
         try await diagnostics.run(.stream) {
             let (endpoint, host) = try destination()
             let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maxOutputTokens, stream: true)
-            let chunks = try http.postJSONStream(endpoint, body: body, bearer: apiKey, host: host,
-                                                 limit: ProviderStreamParser.byteLimit, onResponse: { diagnostics.received($0) })
+            let chunks = try http.postProviderJSON(endpoint, body: body, bearer: apiKey, host: host,
+                                                   stream: true, limit: ProviderStreamParser.byteLimit, diagnostics: diagnostics)
             var parser = ProviderStreamParser(onUpdate: onUpdate)
             defer { diagnostics.streamSummary(parser) }
             for try await chunk in chunks {

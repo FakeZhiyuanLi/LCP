@@ -157,10 +157,14 @@ turn change classes, coursework, Canvas, Drive, Gmail, Gradescope, deadlines,
 grades, or recordings.
 
 If a chat request fails, choose **Copy Error Details** beside the message. The
-diagnostic ID identifies that attempt in the Mac’s unified log. LCP records the
-request stage, HTTP status, response format, event counts, elapsed time and
-failure reason. Keys, prompt text, class materials and replies stay out of these
-log entries. To look up an attempt in Mac Terminal, replace `PASTE-ID-HERE`
+diagnostic ID identifies that attempt in the Mac’s unified log. The copied details
+show how long LCP waited, whether HTTP headers arrived, and how many bytes and
+stream events arrived. When macOS supplies connection metrics, the report also
+includes DNS, connection and TLS timings and upload completion. AI requests allow
+two minutes of network inactivity and ten minutes in total. After a timeout your
+message returns to the composer. You can choose **Send** to retry.
+Keys, URLs, class materials and chat text stay out of these diagnostics.
+To look up an attempt in Mac Terminal, replace `PASTE-ID-HERE`
 with the copied diagnostic ID.
 
 ```sh

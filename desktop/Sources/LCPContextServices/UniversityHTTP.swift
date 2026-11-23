@@ -90,34 +90,35 @@ public struct UniversityHTTP: Sendable {
     }
 
     func postJSON(_ url: URL, body: Data, bearer: String, host: String) async throws -> Data {
-        try await postJSONResponse(url, body: body, bearer: bearer, host: host).0
-    }
-
-    func postJSONResponse(_ url: URL, body: Data, bearer: String, host: String) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
-        return try await send(request, bearer: bearer, allowedHosts: [host], limit: 65_536)
+        return try await send(request, bearer: bearer, allowedHosts: [host], limit: 65_536).0
     }
 
-    func postJSONStream(_ url: URL, body: Data, bearer: String, host: String,
-                        limit: Int, onResponse: @escaping @Sendable (HTTPURLResponse) -> Void) throws -> AsyncThrowingStream<Data, Error> {
+    func postProviderJSON(_ url: URL, body: Data, bearer: String, host: String, stream: Bool,
+                          limit: Int, diagnostics: AgentRequestDiagnostics) throws -> AsyncThrowingStream<Data, Error> {
+        try Task.checkCancellation()
         guard limit > 0, Self.allows(url, hosts: [host]), !bearer.isEmpty,
               bearer.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil else {
             throw UniversityServiceError.message("The service credential or destination is invalid.")
         }
-        var request = URLRequest(url: url)
+        // Model generation can be silent while the gateway queues a request or processes its input.
+        let config = configuration.copy() as! URLSessionConfiguration
+        config.timeoutIntervalForRequest = 120
+        config.timeoutIntervalForResource = 600
+        var request = URLRequest(url: url, timeoutInterval: config.timeoutIntervalForRequest)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue(stream ? "text/event-stream" : "application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization")
         request.httpBody = body
-        let configuration = self.configuration
+        diagnostics.sending(bodyBytes: body.count, idle: request.timeoutInterval, total: config.timeoutIntervalForResource)
         return AsyncThrowingStream { continuation in
-            let delegate = UniversityStreamingRequest(allowedHosts: [host], limit: limit,
-                                                      continuation: continuation, onResponse: onResponse)
-            let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+            let delegate = ProviderHTTPResponse(allowedHosts: [host], limit: limit,
+                                                continuation: continuation, diagnostics: diagnostics)
+            let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
             let task = session.dataTask(with: request)
             continuation.onTermination = { @Sendable _ in session.invalidateAndCancel() }
             task.resume()
@@ -230,20 +231,20 @@ final class UniversityResponse: NSObject, URLSessionDataDelegate, @unchecked Sen
     }
 }
 
-/// Streams bounded POST response chunks without buffering provider output.
-final class UniversityStreamingRequest: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+/// A provider POST uses the same bounded transport for JSON and event streams.
+private final class ProviderHTTPResponse: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let allowedHosts: Set<String>
     private let limit: Int
     private let continuation: AsyncThrowingStream<Data, Error>.Continuation
-    private let onResponse: @Sendable (HTTPURLResponse) -> Void
+    private let diagnostics: AgentRequestDiagnostics
     private var received = 0
 
     init(allowedHosts: Set<String>, limit: Int, continuation: AsyncThrowingStream<Data, Error>.Continuation,
-         onResponse: @escaping @Sendable (HTTPURLResponse) -> Void) {
+         diagnostics: AgentRequestDiagnostics) {
         self.allowedHosts = allowedHosts
         self.limit = limit
         self.continuation = continuation
-        self.onResponse = onResponse
+        self.diagnostics = diagnostics
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -260,7 +261,7 @@ final class UniversityStreamingRequest: NSObject, URLSessionDataDelegate, @unche
             completionHandler(.cancel)
             return
         }
-        onResponse(http)
+        diagnostics.received(http)
         guard (200..<300).contains(http.statusCode) else {
             continuation.finish(throwing: UniversityServiceError.http(http.statusCode))
             completionHandler(.cancel)
@@ -281,7 +282,12 @@ final class UniversityStreamingRequest: NSObject, URLSessionDataDelegate, @unche
             return
         }
         received += chunk.count
+        diagnostics.receivedBody(bytes: received)
         continuation.yield(chunk)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        diagnostics.collected(metrics)
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
