@@ -24,7 +24,7 @@ struct WorkspaceView: View {
                         } else { WelcomeView(model: model) }
                     case .capture: CaptureWorkspaceView(model: model)
                     case .universityConnections: ConnectionsOverview(model: model).id(model.rootURL)
-                    case .planner: ClassPlannerView(model: model, globalScope: true).navigationTitle("Study Planner")
+                    case .planner: ClassPlannerView(model: model).id(model.rootURL).navigationTitle("Study Planner")
                     case .universityChat: ClassChatView(model: model).id(model.rootURL).navigationTitle("University Chat")
                     case .connections: AgentConnectionsView(model: model)
                     case .review: ProposalReviewView(model: model)
@@ -557,7 +557,7 @@ struct ClassContextView: View {
             Group {
                 switch selectedTab {
                 case .planner:
-                    ClassPlannerView(model: model, classID: enrollment.id)
+                    ClassPlannerView(model: model, classID: enrollment.id).id(model.rootURL)
                 case .chat:
                     ClassChatView(model: model, classID: enrollment.id).id(model.rootURL)
                 case .materials:

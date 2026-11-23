@@ -4,50 +4,18 @@ import LCPContextServices
 
 struct ClassPlannerView: View {
     @ObservedObject var model: WorkspaceModel
-    let classID: UUID?
-    let globalScope: Bool
-
+    @ObservedObject private var session: PlannerSession
     @State private var profiles: [AgentProviderProfile] = []
-    @State private var selectedProfileID: UUID?
-    @State private var selectedClassIDs: Set<UUID> = []
-    @State private var objective: String
+    @State private var profileError: String?
     @State private var coursework: [PlannerSource] = []
-    private struct GeneratedPlan {
-        let result: ClassPlanResult
-        let objective: String
-        let profile: AgentProviderProfile
-    }
-    @State private var plan: GeneratedPlan?
-    @State private var generating = false
-    @State private var status: String?
-    @State private var profileTask: Task<Void, Never>?
 
-    private var credentials: AgentProviderCredentials { AgentProviderCredentials.forLibrary(model.rootURL) }
-    private var selectedProfile: AgentProviderProfile? { profiles.first { $0.id == selectedProfileID } }
-    private var activeClasses: [ClassEnrollment] {
-        model.state.classes.filter { !$0.archived }.sorted {
-            let order = $0.shortLabel.localizedStandardCompare($1.shortLabel)
-            if order != .orderedSame { return order == .orderedAscending }
-            return $0.id.uuidString < $1.id.uuidString
-        }
-    }
-    private var activeClassIDs: [UUID] {
-        if let classID { return [classID] }
-        return activeClasses.filter { selectedClassIDs.contains($0.id) }.map(\.id)
-    }
+    private var globalScope: Bool { session.classID == nil }
+    private var selectedProfile: AgentProviderProfile? { profiles.first { $0.id == session.selectedProfileID } }
+    private var activeClassIDs: [UUID] { session.classIDs(in: model) }
 
-    init(model: WorkspaceModel, classID: UUID) {
+    init(model: WorkspaceModel, classID: UUID? = nil) {
         self.model = model
-        self.classID = classID
-        self.globalScope = false
-        _objective = State(initialValue: ClassPlannerService.defaultObjective(acrossClasses: false))
-    }
-
-    init(model: WorkspaceModel, globalScope: Bool) {
-        self.model = model
-        self.classID = nil
-        self.globalScope = globalScope
-        _objective = State(initialValue: ClassPlannerService.defaultObjective(acrossClasses: globalScope))
+        self.session = model.plannerSession(for: classID)
     }
 
     var body: some View {
@@ -58,40 +26,29 @@ struct ClassPlannerView: View {
                 plannerContent
             }
         }
-        .onAppear {
-            if globalScope && selectedClassIDs.isEmpty {
-                selectedClassIDs = Set(activeClasses.map(\.id))
-            }
-            refreshProfiles()
-            refreshCoursework()
-        }
-        .onChange(of: model.rootURL) { _, _ in
-            plan = nil
-            refreshProfiles()
-            refreshCoursework()
-        }
-        .onChange(of: activeClassIDs) { _, _ in
-            plan = nil
-            refreshCoursework()
-        }
+        .task(id: ObjectIdentifier(session)) { await refreshProfiles() }
+        .onAppear { refreshCoursework() }
+        .onChange(of: activeClassIDs) { _, _ in refreshCoursework() }
         .onChange(of: model.state.revision) { _, _ in refreshCoursework() }
-        .task(id: objective) {
+        .task(id: session.objective) {
             do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             refreshCoursework()
         }
-        .onDisappear { profileTask?.cancel() }
     }
 
     private var plannerContent: some View {
         VStack(alignment: .leading, spacing: 18) {
             header
-            if globalScope { scopeCard.disabled(generating) }
-            if profiles.isEmpty {
+            if globalScope { scopeCard.disabled(session.isGenerating) }
+            if profiles.isEmpty && !session.isGenerating {
                 noProvider
             } else {
                 requestCard
-                if let plan { resultCard(plan) }
             }
+            if let status = session.status ?? profileError {
+                Text(status).font(.caption).foregroundStyle(.orange)
+            }
+            if let plan = session.plan, Set(plan.result.context.classIDs) == Set(activeClassIDs) { resultCard(plan) }
             contextCard
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -106,7 +63,7 @@ struct ClassPlannerView: View {
                     Text("Class planner").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
                 }
                 Spacer()
-                if generating { ProgressView().controlSize(.small) }
+                if session.isGenerating { ProgressView().controlSize(.small) }
             }
             Text(globalScope
                  ? "Ask an agent to coordinate your classes using their materials, coursework, notes, and available lecture transcripts."
@@ -148,26 +105,27 @@ struct ClassPlannerView: View {
                     .font(.headline)
                 Spacer()
                 Button("Select all active") {
-                    selectedClassIDs = Set(activeClasses.map(\.id))
+                    session.selectClasses(Set(model.activeClasses.map(\.id)))
                 }
                 .buttonStyle(.borderless)
-                Button("Clear") { selectedClassIDs.removeAll() }
+                Button("Clear") { session.selectClasses([]) }
                     .buttonStyle(.borderless)
             }
             Text("LCP will use the selected classes as one bounded context. Choose fewer classes for a focused plan.")
                 .font(.caption)
                 .foregroundStyle(WorkspacePalette.muted)
-            if activeClasses.isEmpty {
+            if model.activeClasses.isEmpty {
                 Text("Create a class before opening a multi-class plan.")
                     .font(.callout)
                     .foregroundStyle(WorkspacePalette.muted)
             } else {
-                ForEach(activeClasses) { course in
+                ForEach(model.activeClasses) { course in
                     Toggle(isOn: Binding(
-                        get: { selectedClassIDs.contains(course.id) },
+                        get: { session.selectedClassIDs?.contains(course.id) ?? true },
                         set: { selected in
-                            if selected { selectedClassIDs.insert(course.id) }
-                            else { selectedClassIDs.remove(course.id) }
+                            var ids = Set(activeClassIDs)
+                            if selected { ids.insert(course.id) } else { ids.remove(course.id) }
+                            session.selectClasses(ids)
                         }
                     )) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -191,7 +149,7 @@ struct ClassPlannerView: View {
             HStack {
                 Text("What do you want to accomplish?").font(.headline)
                 Spacer()
-                Picker("Agent provider", selection: Binding(get: { selectedProfileID ?? profiles.first?.id }, set: { selectedProfileID = $0 })) {
+                Picker("Agent provider", selection: Binding(get: { session.selectedProfileID ?? profiles.first?.id }, set: { session.selectedProfileID = $0 })) {
                     ForEach(profiles.filter(\.enabled)) { profile in
                         Text("\(profile.name) · \(profile.model)").tag(Optional(profile.id))
                     }
@@ -199,9 +157,10 @@ struct ClassPlannerView: View {
                 .labelsHidden()
                 .frame(maxWidth: 270)
                 .accessibilityLabel("Agent provider")
+                .disabled(session.isGenerating)
             }
-            TextEditor(text: $objective)
-                .disabled(generating)
+            TextEditor(text: $session.objective)
+                .disabled(session.isGenerating)
                 .font(.body)
                 .scrollContentBackground(.hidden)
                 .padding(8)
@@ -214,13 +173,12 @@ struct ClassPlannerView: View {
                     .font(.caption)
                     .foregroundStyle(WorkspacePalette.muted)
                 Spacer()
-                Button(generating ? "Generating…" : "Generate Plan", systemImage: "sparkles") {
-                    generate()
+                Button(session.isGenerating ? "Generating…" : "Generate Plan", systemImage: "sparkles") {
+                    if let selectedProfile { session.generate(in: model, using: selectedProfile) }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(generating || activeClassIDs.isEmpty || selectedProfile == nil || objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(session.isGenerating || activeClassIDs.isEmpty || selectedProfile == nil || session.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            if let status { Text(status).font(.caption).foregroundStyle(.orange) }
         }
         .padding(18)
         .workspacePanel()
@@ -235,7 +193,7 @@ struct ClassPlannerView: View {
                 Button("Refresh") {
                     model.refreshIfChanged()
                     refreshCoursework()
-                }.disabled(generating)
+                }.disabled(session.isGenerating)
             }
             if !activeClassIDs.isEmpty {
                 if coursework.isEmpty {
@@ -267,7 +225,7 @@ struct ClassPlannerView: View {
         .background(WorkspacePalette.tintSurface, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    private func resultCard(_ plan: GeneratedPlan) -> some View {
+    private func resultCard(_ plan: PlannerSession.Plan) -> some View {
         let result = plan.result
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -304,53 +262,23 @@ struct ClassPlannerView: View {
         .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WorkspacePalette.accent, lineWidth: 1.5) }
     }
 
-    private func refreshProfiles() {
-        profileTask?.cancel()
-        let credentials = credentials
-        profileTask = Task { @MainActor in
-            do {
-                let values = try await credentials.profilesListAsync().filter(\.enabled)
-                guard !Task.isCancelled else { return }
-                profiles = values
-                if selectedProfileID == nil || !profiles.contains(where: { $0.id == selectedProfileID }) {
-                    selectedProfileID = profiles.first?.id
-                }
-            } catch {
-                guard !Task.isCancelled else { return }
-                status = error.localizedDescription
+    private func refreshProfiles() async {
+        do {
+            let values = try await model.agentProviders.profiles(model.rootURL).filter(\.enabled)
+            try Task.checkCancellation()
+            profiles = values
+            if !values.contains(where: { $0.id == session.selectedProfileID }) {
+                session.selectedProfileID = values.first?.id
             }
+            profileError = nil
+        } catch {
+            guard !Task.isCancelled else { return }
+            profileError = error.localizedDescription
         }
     }
 
     private func refreshCoursework() {
         guard let repository = model.repository else { coursework = []; return }
-        coursework = ClassPlannerService(repository: repository).courseworkPreview(classIDs: activeClassIDs, objective: objective)
-    }
-
-    private func generate() {
-        guard let repository = model.repository, let profile = selectedProfile else { return }
-        let requestedClassIDs = activeClassIDs
-        guard !requestedClassIDs.isEmpty else {
-            status = "Select at least one class before generating a plan."
-            return
-        }
-        generating = true
-        plan = nil
-        status = nil
-        let request = objective
-        Task { @MainActor in
-            defer { generating = false }
-            do {
-                let key = try await credentials.apiKeyAsync(for: profile)
-                let result = try await ClassPlannerService(repository: repository).generate(
-                    classIDs: requestedClassIDs, objective: request, profile: profile, apiKey: key)
-                guard model.repository === repository, activeClassIDs == requestedClassIDs else { return }
-                plan = GeneratedPlan(result: result, objective: request, profile: profile)
-            } catch is CancellationError {
-                status = "The planning request was cancelled."
-            } catch {
-                status = error.localizedDescription
-            }
-        }
+        coursework = ClassPlannerService(repository: repository).courseworkPreview(classIDs: activeClassIDs, objective: session.objective)
     }
 }

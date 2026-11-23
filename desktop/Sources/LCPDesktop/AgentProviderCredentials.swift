@@ -3,6 +3,16 @@ import CryptoKit
 import LCPContextServices
 import Security
 
+struct AgentProviders {
+    var profiles: @MainActor (URL) async throws -> [AgentProviderProfile] = { root in
+        try await AgentProviderCredentials.forLibrary(root).profilesListAsync()
+    }
+    var apiKey: @MainActor (URL, AgentProviderProfile) async throws -> String = { root, profile in
+        try await AgentProviderCredentials.forLibrary(root).apiKeyAsync(for: profile)
+    }
+    var http = UniversityHTTP()
+}
+
 enum AgentProviderCredentialError: LocalizedError {
     case configurationFile
     case missingConfiguration

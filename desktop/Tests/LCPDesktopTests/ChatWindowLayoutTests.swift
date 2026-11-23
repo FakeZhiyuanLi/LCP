@@ -14,11 +14,11 @@ final class ChatWindowLayoutTests: XCTestCase {
         let provider = AgentProviderProfile(name: "Fictional provider", baseURL: "https://example.invalid/v1",
                                            model: "fictional-model")
 
-        let providers = ChatProviders(profiles: { _ in
+        let providers = AgentProviders(profiles: { _ in
             await Task.yield()
             return [provider]
         })
-        let model = WorkspaceModel(arguments: ["--profile-root", root.path, "--demo"], chatProviders: providers)
+        let model = WorkspaceModel(arguments: ["--profile-root", root.path, "--demo"], agentProviders: providers)
         let enrollment = try XCTUnwrap(model.activeClasses.first)
         model.notice = nil
         let repository = try XCTUnwrap(model.repository)

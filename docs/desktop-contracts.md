@@ -51,7 +51,9 @@ After the student chooses a provider and generates a plan, LCP sends at most
 passages. The provider returns actions and completion criteria keyed to those
 sources. LCP supplies the titles, deadlines and citation links. If an answer
 has no usable steps, LCP builds a local plan from the same evidence. Saving
-creates an attributed history entry with the exact input citations.
+creates an attributed history entry with the exact input citations. While LCP
+is open, the university planner and each class planner keep their own prompt,
+selection, running request and result across tab changes.
 
 ## Agent presentation
 

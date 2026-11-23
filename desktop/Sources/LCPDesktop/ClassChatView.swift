@@ -495,7 +495,7 @@ struct ClassChatView: View {
         let diagnostics = AgentRequestDiagnostics()
         diagnostics.chatStage(.profiles)
         do {
-            let values = try await model.chatProviders.profiles(model.rootURL).filter(\.enabled)
+            let values = try await model.agentProviders.profiles(model.rootURL).filter(\.enabled)
             try Task.checkCancellation()
             profiles = values
             if !values.contains(where: { $0.id == session.selectedProfileID }) {

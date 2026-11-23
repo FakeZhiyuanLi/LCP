@@ -11,8 +11,8 @@ final class ChatNavigationTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let profile = AgentProviderProfile(name: "Fictional provider", baseURL: "https://example.invalid", model: "fixture")
-        let providers = ChatProviders(apiKey: { _, _ in XCTFail("Local reply read the API key"); return "" })
-        let model = WorkspaceModel(arguments: ["--profile-root", root.path], chatProviders: providers)
+        let providers = AgentProviders(apiKey: { _, _ in XCTFail("Local reply read the API key"); return "" })
+        let model = WorkspaceModel(arguments: ["--profile-root", root.path], agentProviders: providers)
         model.canvasSyncInterval = .manual
         let course = ClassEnrollment(title: "Fictional astronomy")
         let repository = try XCTUnwrap(model.repository)
@@ -201,9 +201,9 @@ final class ChatNavigationTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [PausedChatStream.self]
         let profile = AgentProviderProfile(name: "Fictional provider", baseURL: "https://example.invalid", model: "fixture")
-        let providers = ChatProviders(profiles: { _ in [profile] }, apiKey: { _, _ in "fictional-key" },
+        let providers = AgentProviders(profiles: { _ in [profile] }, apiKey: { _, _ in "fictional-key" },
                                       http: UniversityHTTP(configuration: config))
-        let model = WorkspaceModel(arguments: ["--profile-root", root.path], chatProviders: providers)
+        let model = WorkspaceModel(arguments: ["--profile-root", root.path], agentProviders: providers)
         model.canvasSyncInterval = .manual
         let course = ClassEnrollment(title: "Fictional astronomy")
         let repository = try XCTUnwrap(model.repository)

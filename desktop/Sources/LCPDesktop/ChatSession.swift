@@ -3,16 +3,6 @@ import Foundation
 import LCPContextCore
 import LCPContextServices
 
-struct ChatProviders {
-    var profiles: @MainActor (URL) async throws -> [AgentProviderProfile] = { root in
-        try await AgentProviderCredentials.forLibrary(root).profilesListAsync()
-    }
-    var apiKey: @MainActor (URL, AgentProviderProfile) async throws -> String = { root, profile in
-        try await AgentProviderCredentials.forLibrary(root).apiKeyAsync(for: profile)
-    }
-    var http = UniversityHTTP()
-}
-
 /// Drafts and running requests belong to a conversation, even while its view is closed.
 @MainActor
 final class ChatSession: ObservableObject {
@@ -100,7 +90,7 @@ final class ChatSession: ObservableObject {
         let autoFile = automaticallyFileUploads
         let history = model.chatThread(classID: classID)?.messages ?? []
         let root = model.rootURL
-        let providers = model.chatProviders
+        let providers = model.agentProviders
         let diagnostics = AgentRequestDiagnostics()
         let id = diagnostics.id
         let local = ClassPlannerService.isLocalAcknowledgment(question, uploads: files)
