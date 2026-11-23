@@ -14,6 +14,8 @@ final class AgentProviderFixtureProtocol: URLProtocol, @unchecked Sendable {
     static var simulateTimeout: AgentTimeoutPhase?
     static var rejectedToolParameter: String?
     static var generationRequests = 0
+    static var filingFollowup: [String: Any]?
+    static var firstRequest: [String: Any] = [:]
     static let partialReplyTimeout = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -27,6 +29,7 @@ final class AgentProviderFixtureProtocol: URLProtocol, @unchecked Sendable {
             Self.requestBody = object
         }
         Self.generationRequests += 1
+        if Self.generationRequests == 1 { Self.firstRequest = Self.requestBody }
         if let param = Self.rejectedToolParameter, Self.requestBody["tools"] != nil {
             let response = HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: "HTTP/1.1",
                                            headerFields: ["Content-Type": "application/json"])!
@@ -68,7 +71,8 @@ final class AgentProviderFixtureProtocol: URLProtocol, @unchecked Sendable {
                     start = end
                 }
             } else {
-                let body = (try? JSONSerialization.data(withJSONObject: Self.response)) ?? Data()
+                let object = Self.generationRequests == 2 ? Self.filingFollowup ?? Self.response : Self.response
+                let body = (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
                 client?.urlProtocol(self, didLoad: body)
             }
         }
@@ -113,6 +117,8 @@ final class AgentProviderClientTests: XCTestCase {
         AgentProviderFixtureProtocol.simulateTimeout = nil
         AgentProviderFixtureProtocol.rejectedToolParameter = nil
         AgentProviderFixtureProtocol.generationRequests = 0
+        AgentProviderFixtureProtocol.filingFollowup = nil
+        AgentProviderFixtureProtocol.firstRequest = [:]
         AgentProviderFixtureProtocol.partialReplyTimeout.withLock { $0 = nil }
     }
 
@@ -161,9 +167,67 @@ final class AgentProviderClientTests: XCTestCase {
         XCTAssertEqual(AgentProviderFixtureProtocol.requestBody["max_output_tokens"] as? Int, 64)
     }
 
-    func testGenerationRejectsOversizedPrompt() async throws {
+    @MainActor
+    func testChatUploadsSendContentAndAcceptOnlySuggestionsForSuppliedFilesAndClasses() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = try ContextRepository(rootURL: directory)
+        let course = ClassEnrollment(title: "Observational Astronomy")
+        try repository.update { $0.classes = [course] }
+        let source = directory.appendingPathComponent("Handout.md")
+        try Data("Fictional orbital marker 937.".utf8).write(to: source)
+        let upload = try ChatUpload.read(source)
+        let image = directory.appendingPathComponent("Figure.png")
+        let imageData = try XCTUnwrap(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYuoAAAAASUVORK5CYII="))
+        try imageData.write(to: image)
+        let picture = try ChatUpload.read(image)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [AgentProviderFixtureProtocol.self]
+        let planner = ClassPlannerService(repository: repository, http: UniversityHTTP(configuration: config))
+        let profile = AgentProviderProfile(name: "Fiction", baseURL: "https://provider.example/v1", model: "fixture")
+        func call(_ file: UUID, _ target: UUID) throws -> [String: Any] {
+            let args = ["attachment_id": file.uuidString, "class_id": target.uuidString, "title": "Orbital handout", "reason": "Reference for the orbit lab."]
+            return ["type": "function_call", "call_id": "call_" + UUID().uuidString, "name": ChatFilingTool.name,
+                    "arguments": String(decoding: try JSONEncoder().encode(args), as: UTF8.self)]
+        }
+        AgentProviderFixtureProtocol.filingFollowup = ["output_text": "The orbital marker is 937.", "usage": ["total_tokens": 22]]
+        AgentProviderFixtureProtocol.response = ["usage": ["total_tokens": 15], "output": try [
+            call(upload.id, course.id), call(picture.id, UUID()), call(UUID(), course.id)]]
+        let longMessage = String(repeating: "Compare orbits.\t", count: 22_000) + "End of question."
+        let reply = try await planner.generateChatStream(classIDs: [course.id], history: [], message: longMessage,
+            profile: profile, apiKey: "fictional", uploads: [upload, picture]) { _ in }
+        XCTAssertEqual(AgentProviderFixtureProtocol.generationRequests, 2)
+        XCTAssertEqual(reply.response.text, "The orbital marker is 937.")
+        XCTAssertEqual(reply.response.usage?.totalTokens, 37)
+        let followupInputs = try XCTUnwrap(AgentProviderFixtureProtocol.requestBody["input"] as? [[String: Any]])
+        XCTAssertEqual(followupInputs.filter { $0["type"] as? String == "function_call_output" }.count, 3)
+        XCTAssertNil(AgentProviderFixtureProtocol.requestBody["tools"])
+        let body = AgentProviderFixtureProtocol.firstRequest
+        let messages = try XCTUnwrap(body["input"] as? [[String: Any]])
+        let parts = try XCTUnwrap(messages.first?["content"] as? [[String: Any]])
+        XCTAssertTrue((parts.first?["text"] as? String)?.contains(longMessage) == true)
+        XCTAssertTrue(parts.contains { ($0["text"] as? String)?.contains("Fictional orbital marker 937.") == true })
+        XCTAssertTrue(parts.contains { $0["image_url"] as? String == "data:image/png;base64," + imageData.base64EncodedString() })
+        XCTAssertFalse(parts.contains { ($0["text"] as? String)?.contains(directory.path) == true })
+        XCTAssertTrue((body["tools"] as? [[String: Any]])?.contains { $0["name"] as? String == ChatFilingTool.name } == true)
+        XCTAssertEqual(reply.response.filingSuggestions.map(\.attachmentID), [upload.id])
+        XCTAssertTrue(repository.state.materials.isEmpty)
+
+        try upload.retain(in: repository)
+        let history = [ChatMessage(role: .user, content: "", contextClassIDs: [course.id], attachments: [upload.attachment])]
+        AgentProviderFixtureProtocol.response = ["output_text": "Follow-up"]
+        _ = try await planner.generateChat(classIDs: [course.id], history: history, message: "Which marker?",
+                                           profile: profile, apiKey: "fictional")
+        let followup = try JSONSerialization.data(withJSONObject: AgentProviderFixtureProtocol.requestBody)
+        XCTAssertTrue(String(decoding: followup, as: UTF8.self).contains("Fictional orbital marker 937."))
+        _ = try await planner.generateChat(classIDs: [], history: history, message: "Other scope", profile: profile, apiKey: "fictional")
+        let outside = try JSONSerialization.data(withJSONObject: AgentProviderFixtureProtocol.requestBody)
+        XCTAssertFalse(String(decoding: outside, as: UTF8.self).contains("Fictional orbital marker 937."))
+    }
+
+    func testGenerationRejectsInputAboveTotalTransportBudget() async throws {
         do {
-            _ = try await client().generate(prompt: String(repeating: "x", count: 3_000_001))
+            _ = try await client().generate(prompt: String(repeating: "x", count: OpenAICompatibleAgentClient.maximumRequestBytes))
             XCTFail("Expected an input-size error")
         } catch let error as AgentProviderError {
             XCTAssertEqual(error, .inputTooLarge)

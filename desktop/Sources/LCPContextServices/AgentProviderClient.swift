@@ -90,8 +90,11 @@ public struct AgentProviderGenerationResult: Equatable, Sendable {
     public let text: String
     public let requestID: String?
     public let usage: TokenUsage?
+    public var filingSuggestions: [ChatFilingSuggestion]
+    var fileContinuation: ProviderFileContinuation?
 
-    public init(text: String, requestID: String? = nil, usage: TokenUsage? = nil) {
+    public init(text: String, requestID: String? = nil, usage: TokenUsage? = nil, filingSuggestions: [ChatFilingSuggestion] = []) {
+        self.filingSuggestions = filingSuggestions
         self.text = text
         self.requestID = requestID
         self.usage = usage
@@ -176,7 +179,7 @@ public enum AgentProviderError: LocalizedError, Equatable, Sendable {
         case .invalidCredential:
             return "Enter an API key without spaces or line breaks."
         case .inputTooLarge:
-            return "The selected class context is too large for this provider request. Narrow the class context and try again."
+            return "The combined message, files, and class context exceed the provider request budget. Send fewer files or split this request."
         case .unsupportedProvider:
             return "This provider connection is not supported yet. Choose OpenAI-compatible Responses API."
         case .invalidResponse:
@@ -255,33 +258,41 @@ public struct OpenAICompatibleAgentClient: Sendable {
         }
     }
 
-    public func generate(prompt: String, maxOutputTokens: Int = 1_200) async throws -> AgentProviderGenerationResult {
+    public func generate(prompt: String, maxOutputTokens: Int = 1_200, files: [ChatFileInput] = []) async throws -> AgentProviderGenerationResult {
         let diagnostics = AgentRequestDiagnostics()
         return try await diagnostics.run(.generate) {
             let (endpoint, host) = try destination()
-            let object = try await withGenerationBody(prompt: prompt, maximum: maxOutputTokens, stream: false) { body, tools in
+            let object = try await withGenerationBody(prompt: prompt, maximum: maxOutputTokens, stream: false, files: files) { body, tools in
                 try await jsonResponse(endpoint: endpoint, host: host, body: body, diagnostics: diagnostics, displayTools: tools)
             }
             try Self.checkStatus(object)
             var displays = ProviderDisplayCalls()
             displays.response(object)
             let parts = [Self.responseText(from: object) ?? "", displays.markdown()].filter { !$0.isEmpty }
-            let text = parts.joined(separator: "\n\n")
+            let suggestions = displays.filingSuggestions
+            let text = parts.isEmpty && !suggestions.isEmpty ? ChatFilingTool.reply : parts.joined(separator: "\n\n")
             guard !text.isEmpty else { throw AgentProviderError.response(.noText) }
-            return AgentProviderGenerationResult(text: text, requestID: object["id"] as? String,
-                                                 usage: Self.usage(from: object["usage"] as? [String: Any]))
+            let first = AgentProviderGenerationResult(text: text, requestID: object["id"] as? String,
+                usage: Self.usage(from: object["usage"] as? [String: Any]), filingSuggestions: suggestions)
+            guard !files.isEmpty, let continuation = displays.continuation else { return first }
+            let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maxOutputTokens,
+                stream: false, displayTools: false, files: files, continuation: continuation)
+            let final = try await jsonResponse(endpoint: endpoint, host: host, body: body, diagnostics: diagnostics)
+            try Self.checkStatus(final)
+            guard let answer = Self.responseText(from: final) else { throw AgentProviderError.response(.noText) }
+            return first.appending(.init(text: answer, requestID: final["id"] as? String, usage: Self.usage(from: final["usage"] as? [String: Any])))
         }
     }
 
-    public func generateStream(prompt: String, maxOutputTokens: Int = 1_200,
+    public func generateStream(prompt: String, maxOutputTokens: Int = 1_200, files: [ChatFileInput] = [],
                                diagnostics: AgentRequestDiagnostics = .init(),
                                onUpdate: @escaping @Sendable (AgentProviderStreamUpdate) -> Void) async throws -> AgentProviderGenerationResult {
         try await diagnostics.run(.stream) {
             let (endpoint, host) = try destination()
-            return try await withGenerationBody(prompt: prompt, maximum: maxOutputTokens, stream: true) { body, tools in
+            func stream(_ body: Data, tools: Bool, update: @escaping @Sendable (AgentProviderStreamUpdate) -> Void) async throws -> AgentProviderGenerationResult {
                 let chunks = try http.postProviderJSON(endpoint, body: body, bearer: apiKey, host: host,
                                                        stream: true, limit: ProviderStreamParser.byteLimit, diagnostics: diagnostics, displayTools: tools)
-                var parser = ProviderStreamParser(onUpdate: onUpdate)
+                var parser = ProviderStreamParser(onUpdate: update)
                 defer { diagnostics.streamSummary(parser) }
                 for try await chunk in chunks {
                     try Task.checkCancellation()
@@ -290,19 +301,32 @@ public struct OpenAICompatibleAgentClient: Sendable {
                 try Task.checkCancellation()
                 return try parser.finish()
             }
+            let first = try await withGenerationBody(prompt: prompt, maximum: maxOutputTokens, stream: true, files: files) { body, tools in
+                try await stream(body, tools: tools, update: onUpdate)
+            }
+            guard !files.isEmpty, let continuation = first.fileContinuation else { return first }
+            try Task.checkCancellation()
+            let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maxOutputTokens,
+                stream: true, displayTools: false, files: files, continuation: continuation)
+            let prefix = first.text == ChatFilingTool.reply ? "" : first.text + "\n\n"
+            let final = try await stream(body, tools: false) { update in
+                onUpdate(.init(delta: update.delta, text: prefix + update.text, requestID: update.requestID,
+                               usage: update.usage, finished: update.finished))
+            }
+            return first.appending(final)
         }
     }
 
-    private func withGenerationBody<T>(prompt: String, maximum: Int, stream: Bool,
+    private func withGenerationBody<T>(prompt: String, maximum: Int, stream: Bool, files: [ChatFileInput],
                                        send: (Data, Bool) async throws -> T) async throws -> T {
         let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maximum,
-                                           stream: stream, displayTools: true)
+                                           stream: stream, displayTools: true, files: files)
         do { return try await send(body, true) }
         catch is UnsupportedDisplayTools {
             // Some compatible gateways reject function declarations before beginning a response.
             try Task.checkCancellation()
             return try await send(Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maximum,
-                                                      stream: stream, displayTools: false), false)
+                                                      stream: stream, displayTools: false, files: files), false)
         }
     }
 
@@ -320,6 +344,8 @@ public struct OpenAICompatibleAgentClient: Sendable {
         return .response(reason == "max_output_tokens" ? .tokenLimit : .incomplete)
     }
 
+    static let maximumRequestBytes = 64 * 1024 * 1024
+
     static func requestBody(model: String) throws -> Data {
         let payload: [String: Any] = [
             "model": model,
@@ -335,8 +361,9 @@ public struct OpenAICompatibleAgentClient: Sendable {
         try generationBody(model: model, prompt: prompt, maxOutputTokens: maxOutputTokens, stream: false, displayTools: true)
     }
 
-    private static func generationBody(model: String, prompt: String, maxOutputTokens: Int, stream: Bool, displayTools: Bool) throws -> Data {
-        guard (1...4_096).contains(maxOutputTokens), prompt.utf8.count <= 3_000_000 else {
+    private static func generationBody(model: String, prompt: String, maxOutputTokens: Int, stream: Bool, displayTools: Bool, files: [ChatFileInput] = [], continuation: ProviderFileContinuation? = nil) throws -> Data {
+        // Avoid duplicating a request that already exceeds the total wire budget.
+        guard (1...4_096).contains(maxOutputTokens), prompt.utf8.count < Self.maximumRequestBytes else {
             throw AgentProviderError.inputTooLarge
         }
         var payload: [String: Any] = [
@@ -346,16 +373,31 @@ public struct OpenAICompatibleAgentClient: Sendable {
             "store": false,
             "stream": stream
         ]
+        if !files.isEmpty {
+            let promptPart: [String: Any] = ["type": "input_text", "text": prompt]
+            var input: [[String: Any]] = [["role": "user", "content": [promptPart] + (try files.flatMap { try $0.parts() })]]
+            if let continuation {
+                input += try continuation.input(files: files)
+                payload["instructions"] = "The local filing tools have finished. Answer the student's original question using the attached data. Include the requested document details in your response. The student controls how filing suggestions are applied."
+            }
+            payload["input"] = input
+        }
         if displayTools {
-            payload["tools"] = AgentDisplayTool.allCases.map { tool -> [String: Any] in
+            var tools = AgentDisplayTool.allCases.map { tool -> [String: Any] in
                 ["type": "function", "name": tool.rawValue, "description": tool.guidance,
                  "parameters": tool.inputSchema, "strict": false]
             }
+            if files.contains(where: { !$0.destinations.isEmpty && $0.file.savedMaterialID == nil }) {
+                payload["include"] = ["reasoning.encrypted_content"]
+                tools.append(["type": "function", "name": ChatFilingTool.name, "description": ChatFilingTool.guidance,
+                              "parameters": ChatFilingTool.schema, "strict": false])
+            }
+            payload["tools"] = tools
             payload["instructions"] = "Write readable Markdown. Use a display tool when a comparison or sequence would help the student. Use up to four visuals. Include explanations and citations in the same response. Each tool displays its graphic directly in LCP. Use known facts and clearly label estimates."
         }
         guard JSONSerialization.isValidJSONObject(payload) else { throw AgentProviderError.invalidConfiguration }
         let data = try JSONSerialization.data(withJSONObject: payload, options: [])
-        guard data.count <= 3_500_000 else { throw AgentProviderError.inputTooLarge }
+        guard data.count <= Self.maximumRequestBytes else { throw AgentProviderError.inputTooLarge }
         return data
     }
 

@@ -516,11 +516,12 @@ public struct ChatMessage: Codable, Equatable, Identifiable, Sendable {
     public var contextClassIDs: [UUID]
     public var contextRevision: UInt64?
     public var usage: TokenUsage?
+    public var attachments: [ChatAttachment]?
 
     public init(id: UUID = UUID(), role: ChatMessageRole, content: String, createdAt: Date = Date(),
                 agentIdentity: String? = nil, citations: [SourceCitation] = [],
                 contextClassIDs: [UUID] = [], contextRevision: UInt64? = nil,
-                usage: TokenUsage? = nil) {
+                usage: TokenUsage? = nil, attachments: [ChatAttachment]? = nil) {
         self.id = id
         self.role = role
         self.content = content
@@ -530,6 +531,7 @@ public struct ChatMessage: Codable, Equatable, Identifiable, Sendable {
         self.contextClassIDs = contextClassIDs
         self.contextRevision = contextRevision
         self.usage = usage
+        self.attachments = attachments
     }
 }
 

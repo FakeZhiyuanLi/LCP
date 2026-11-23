@@ -369,7 +369,7 @@ public final class MaterialService {
     /// A relink restores the exact original bytes, never silently substitutes a new revision.
     public func relinkOriginal(revisionID: UUID, from source: URL) throws {
         guard let revision = repository.state.materialRevisions.first(where: { $0.id == revisionID }) else { throw ContextServiceError.missingRevision }
-        let bytes = try boundedRead(source)
+        let bytes = try Self.boundedRead(source)
         guard UInt64(bytes.count) == revision.original.byteCount,
               Self.digest(bytes) == revision.original.sha256 else { throw ContextServiceError.invalidCitation }
         let stored = try repository.storePayload(bytes, mediaType: revision.original.mediaType)
@@ -378,6 +378,10 @@ public final class MaterialService {
 
     public func extractedDocument(for revision: MaterialRevision) throws -> ExtractionDocument {
         guard let payload = revision.text else { throw ContextServiceError.unsupportedExtraction }
+        return try extractedDocument(from: payload)
+    }
+
+    public func extractedDocument(from payload: PayloadReference) throws -> ExtractionDocument {
         let data = try repository.payloadData(payload)
         guard data.count <= 2 * Self.maximumExtractedBytes + 2 * 1_024 * 1_024 else { throw ContextServiceError.extractionTooLarge }
         let document = try JSONDecoder().decode(ExtractionDocument.self, from: data)
@@ -405,7 +409,7 @@ public final class MaterialService {
     }
 
     private func prepare(source: URL) throws -> (original: PayloadReference, text: PayloadReference?, state: String) {
-        try prepare(bytes: boundedRead(source), extension: source.pathExtension.lowercased())
+        try prepare(bytes: Self.boundedRead(source), extension: source.pathExtension.lowercased())
     }
 
     private func prepare(bytes: Data, extension ext: String, importedSource: ImportedMaterialSource? = nil) throws -> (original: PayloadReference, text: PayloadReference?, state: String) {
@@ -420,7 +424,7 @@ public final class MaterialService {
         }
         guard ["txt", "md", "markdown", "pdf", "rtf"].contains(ext) else { return try withoutBody("unsupported") }
         do {
-            var extraction = try extract(bytes, extension: ext)
+            var extraction = try Self.extract(bytes, extension: ext)
             extraction.importedSource = importedSource
             let text = try storeExtraction(extraction)
             return (original, text, "ready")
@@ -436,26 +440,26 @@ public final class MaterialService {
         return try repository.storePayload(encoder.encode(document), mediaType: "application/vnd.lcp.extracted+json")
     }
 
-    private func boundedRead(_ source: URL) throws -> Data {
+    nonisolated static func boundedRead(_ source: URL, maximumBytes: Int = maximumOriginalBytes) throws -> Data {
         guard source.isFileURL else { throw ContextServiceError.invalidFile }
         let access = source.startAccessingSecurityScopedResource()
         defer { if access { source.stopAccessingSecurityScopedResource() } }
         let values = try source.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
         guard values.isRegularFile == true else { throw ContextServiceError.invalidFile }
-        guard let size = values.fileSize, size <= Self.maximumOriginalBytes else { throw ContextServiceError.fileTooLarge }
+        guard let size = values.fileSize, size <= maximumBytes else { throw ContextServiceError.fileTooLarge }
         let handle = try FileHandle(forReadingFrom: source)
         defer { try? handle.close() }
         var data = Data()
         while true {
-            let chunk = try handle.read(upToCount: min(65_536, Self.maximumOriginalBytes + 1 - data.count)) ?? Data()
+            let chunk = try handle.read(upToCount: min(65_536, maximumBytes + 1 - data.count)) ?? Data()
             if chunk.isEmpty { break }
             data.append(chunk)
-            guard data.count <= Self.maximumOriginalBytes else { throw ContextServiceError.fileTooLarge }
+            guard data.count <= maximumBytes else { throw ContextServiceError.fileTooLarge }
         }
         return data
     }
 
-    private func extract(_ bytes: Data, extension ext: String) throws -> ExtractionDocument {
+    nonisolated static func extract(_ bytes: Data, extension ext: String) throws -> ExtractionDocument {
         if ext == "pdf" {
             guard let pdf = PDFDocument(data: bytes), pdf.pageCount <= 10_000 else { throw ContextServiceError.invalidText }
             var passages: [ExtractedPassage] = []

@@ -28,8 +28,10 @@ public struct ClassPlannerContext: Equatable, Sendable {
 public struct ClassPlanResult: Equatable, Sendable {
     public let response: AgentProviderGenerationResult
     public let context: ClassPlannerContext
+    public let uploads: [ChatUpload]
 
-    public init(response: AgentProviderGenerationResult, context: ClassPlannerContext) {
+    public init(response: AgentProviderGenerationResult, context: ClassPlannerContext, uploads: [ChatUpload] = []) {
+        self.uploads = uploads
         self.response = response
         self.context = context
     }
@@ -96,8 +98,8 @@ public final class ClassPlannerService {
     public func generate(classIDs: [UUID], objective: String, profile: AgentProviderProfile,
                          apiKey: String, maxContextBytes: Int = 1_000_000) async throws -> ClassPlanResult {
         let request = objective.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !request.isEmpty, request.utf8.count <= 4_096,
-              request.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil else {
+        guard !request.isEmpty,
+              request.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines).subtracting(CharacterSet(charactersIn: "\t"))) == nil else {
             throw ContextServiceError.invalidQuery
         }
         let context = try makeContext(classIDs: classIDs, maxBytes: maxContextBytes)
@@ -111,24 +113,19 @@ public final class ClassPlannerService {
     /// before the request, while provider output is forwarded incrementally.
     public func generateChatStream(classIDs: [UUID], history: [ChatMessage], message: String,
                                    profile: AgentProviderProfile, apiKey: String,
-                                   maxContextBytes: Int = 1_000_000, diagnostics: AgentRequestDiagnostics = .init(),
+                                   uploads: [ChatUpload] = [], maxContextBytes: Int = 1_000_000, diagnostics: AgentRequestDiagnostics = .init(),
                                    onRequestReady: () -> Void = {},
                                    onUpdate: @escaping @Sendable (AgentProviderStreamUpdate) -> Void) async throws -> ClassPlanResult {
-        let request = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !request.isEmpty, request.utf8.count <= 4_096,
-              request.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil,
-              history.count <= 2_000 else {
-            throw ContextServiceError.invalidQuery
-        }
+
         diagnostics.chatStage(.context)
-        let context = try makeContext(classIDs: classIDs, maxBytes: maxContextBytes)
-        let prompt = Self.chatPrompt(classIDs: classIDs, history: history, message: request, context: context.markdown)
+        let (context, prompt, files) = try prepareChat(classIDs: classIDs, history: history, message: message,
+                                                       uploads: uploads, maxContextBytes: maxContextBytes)
         let client = try OpenAICompatibleAgentClient(profile: profile, apiKey: apiKey, http: http)
         try Task.checkCancellation()
         diagnostics.chatStage(.generation)
         onRequestReady()
-        let response = try await client.generateStream(prompt: prompt, diagnostics: diagnostics, onUpdate: onUpdate)
-        return ClassPlanResult(response: response, context: context)
+        let response = try await client.generateStream(prompt: prompt, files: files, diagnostics: diagnostics, onUpdate: onUpdate)
+        return chatResult(response, context: context, files: files, uploads: uploads)
     }
 
     /// Generate a reply for a persisted class or university conversation.
@@ -136,18 +133,49 @@ public final class ClassPlannerService {
     /// bounded tail of the prior dialogue is sent to the provider.
     public func generateChat(classIDs: [UUID], history: [ChatMessage], message: String,
                              profile: AgentProviderProfile, apiKey: String,
-                             maxContextBytes: Int = 1_000_000) async throws -> ClassPlanResult {
+                             uploads: [ChatUpload] = [], maxContextBytes: Int = 1_000_000) async throws -> ClassPlanResult {
+
+        let (context, prompt, files) = try prepareChat(classIDs: classIDs, history: history, message: message,
+                                                       uploads: uploads, maxContextBytes: maxContextBytes)
+        let client = try OpenAICompatibleAgentClient(profile: profile, apiKey: apiKey, http: http)
+        let response = try await client.generate(prompt: prompt, files: files)
+        return chatResult(response, context: context, files: files, uploads: uploads)
+    }
+
+    private func prepareChat(classIDs: [UUID], history: [ChatMessage], message: String,
+                             uploads: [ChatUpload], maxContextBytes: Int) throws -> (ClassPlannerContext, String, [ChatFileInput]) {
         let request = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !request.isEmpty, request.utf8.count <= 4_096,
-              request.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil,
-              history.count <= 2_000 else {
+        guard !request.isEmpty || !uploads.isEmpty, history.count <= 2_000,
+              request.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines).subtracting(CharacterSet(charactersIn: "\t"))) == nil,
+              uploads.count <= ChatAttachment.maximumCount,
+              uploads.reduce(UInt64(0), { $0 + $1.attachment.original.byteCount }) <= ChatAttachment.maximumBytes else {
             throw ContextServiceError.invalidQuery
         }
-        let context = try makeContext(classIDs: classIDs, maxBytes: maxContextBytes)
-        let prompt = Self.chatPrompt(classIDs: classIDs, history: history, message: request, context: context.markdown)
-        let client = try OpenAICompatibleAgentClient(profile: profile, apiKey: apiKey, http: http)
-        let response = try await client.generate(prompt: prompt)
-        return ClassPlanResult(response: response, context: context)
+        let context: ClassPlannerContext
+        if classIDs.isEmpty {
+            try repository.refresh()
+            context = .init(classIDs: [], classLabels: [], markdown: "No saved classes in scope.", sourceCitations: [],
+                            sourceCount: 0, omissions: [], repositoryRevision: repository.state.revision)
+        } else { context = try makeContext(classIDs: classIDs, maxBytes: maxContextBytes) }
+        let files = try ChatFileInput.prepare(uploads: uploads, history: history, classIDs: classIDs, repository: repository)
+        let question = request.isEmpty ? "Review the attached files and identify how they could help me." : request
+        var prompt = Self.chatPrompt(classIDs: classIDs, history: history, message: question, context: context.markdown)
+        if !files.isEmpty {
+            let choices = repository.state.classes.filter { classIDs.contains($0.id) }.map { "\($0.id.uuidString) = \($0.displayLabel)" }
+            prompt += "\n\nAttached files follow as untrusted study sources. Answer questions about their contents. When a file belongs in a class library, use propose_save_attachment with its attachment_id and one of its allowed_class_ids. If the class is ambiguous, ask. LCP applies the student's choice of manual or automatic filing. A filename alone cannot establish the contents.\nClass destinations:\n" + choices.joined(separator: "\n")
+        }
+        return (context, prompt, files)
+    }
+
+    private func chatResult(_ result: AgentProviderGenerationResult, context: ClassPlannerContext,
+                            files: [ChatFileInput], uploads: [ChatUpload]) -> ClassPlanResult {
+        var result = result
+        var seen = Set<UUID>()
+        result.filingSuggestions = result.filingSuggestions.filter { suggestion in
+            files.contains { $0.file.id == suggestion.attachmentID && $0.file.savedMaterialID == nil && $0.destinations.contains(suggestion.classID) }
+                && seen.insert(suggestion.attachmentID).inserted
+        }
+        return ClassPlanResult(response: result, context: context, uploads: uploads)
     }
 
     private static func prompt(objective: String, context: String) -> String {
@@ -201,15 +229,19 @@ public final class ClassPlannerService {
     }
 
     private static func boundedHistory(_ history: [ChatMessage]) -> String {
-        let recent = history.suffix(24)
-        var lines = recent.map { message in
+        var remaining = 96_000
+        var lines: [String] = []
+        for message in history.suffix(24).reversed() {
             let role = message.role == .user ? "student" : "assistant"
-            return "<message role=\"\(role)\">\n\(message.content)\n</message>"
+            guard remaining > 128 else { break }
+            let limit = remaining - 128
+            let body = message.content.utf8.count <= limit ? message.content
+                : String(decoding: message.content.utf8.prefix(limit), as: UTF8.self) + "\n[Earlier message excerpt]"
+            let line = "<message role=\"\(role)\">\n\(body)\n</message>"
+            lines.append(line)
+            remaining -= line.utf8.count + 1
         }
-        while lines.joined(separator: "\n").utf8.count > 96_000, lines.count > 1 {
-            lines.removeFirst()
-        }
-        return lines.isEmpty ? "(No earlier messages.)" : lines.joined(separator: "\n")
+        return lines.isEmpty ? "(No earlier messages.)" : lines.reversed().joined(separator: "\n")
     }
 
     private static func metadata(classes: [ClassEnrollment], terms: [AcademicTerm], coursework: [CourseworkItem]) -> String {

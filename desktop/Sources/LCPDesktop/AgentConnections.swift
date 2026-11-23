@@ -313,6 +313,10 @@ private struct GrantCard: View {
             if grant.isActive {
                 Toggle("Allow future note proposals", isOn: capability("propose_note")).toggleStyle(.checkbox)
                     .accessibilityLabel("Allow future note proposals from \(connection.name)")
+                if grant.allowedMaterialIDs == nil && grant.eventFrom == nil && grant.eventUntil == nil {
+                    Toggle("Allow reading class chat attachments and suggesting where to file them", isOn: capability(ChatFilingTool.name))
+                        .toggleStyle(.checkbox)
+                }
                 Toggle("Allow future study-log proposals", isOn: capability("propose_study_log")).toggleStyle(.checkbox)
                     .accessibilityLabel("Allow future study-log proposals from \(connection.name)")
                 Text("Changing proposal permission keeps read access. Existing drafts still require your review.").font(.caption2).foregroundStyle(.secondary)
@@ -359,6 +363,7 @@ struct LocalAgentGrantDraft {
     var name = "Codex (local MCP)"
     var classIDs: Set<UUID> = []
     var allowProposals = false
+    var allowChatFiles = false
     var scope = ContextScopeDraft()
 
     func canCreate(visibleClassIDs: Set<UUID>, availableMaterialIDs: Set<UUID>) -> Bool {
@@ -374,8 +379,10 @@ struct LocalAgentGrantDraft {
         guard canCreate(visibleClassIDs: visibleClassIDs, availableMaterialIDs: availableMaterialIDs) else {
             throw DesktopUIError.message("The available classes or materials changed. Review your selection before creating the grant.")
         }
+        var capabilities = allowProposals ? ["read_context", "propose_note", "propose_study_log"] : ["read_context"]
+        if allowChatFiles && !scope.materialsOnly && !scope.timeLimited { capabilities.append(ChatFilingTool.name) }
         let connection = AgentConnection(name: name.trimmingCharacters(in: .whitespacesAndNewlines), mode: "stdio",
-            capabilities: allowProposals ? ["read_context", "propose_note", "propose_study_log"] : ["read_context"])
+                                         capabilities: capabilities)
         let grant = AgentGrant(connectionID: connection.id, allowedClassIDs: classIDs.sorted { $0.uuidString < $1.uuidString },
             allowedMaterialIDs: scope.selectedMaterialIDs, eventFrom: scope.from, eventUntil: scope.until)
         state.connections.append(connection)
@@ -426,6 +433,9 @@ struct NewAgentGrantView: View {
                     SourceScopeControls(state: model.state, materials: materials, materialsOnly: $draft.scope.materialsOnly, selectedMaterialIDs: $draft.scope.materialIDs,
                         timeLimited: $draft.scope.timeLimited, eventFrom: $draft.scope.eventFrom, eventUntil: $draft.scope.eventUntil)
                     Toggle("Allow proposals for notes and study logs", isOn: $draft.allowProposals)
+                    if !draft.scope.materialsOnly && !draft.scope.timeLimited {
+                        Toggle("Allow reading class chat attachments and suggesting where to file them", isOn: $draft.allowChatFiles)
+                    }
                     Text("Proposals require your review. This never grants permission to silently change sources, official deadlines, grades, recording controls, or class mappings.").font(.caption).foregroundStyle(.secondary)
                     GroupBox("Access to create") {
                         VStack(alignment: .leading, spacing: 6) {

@@ -65,10 +65,31 @@ on a student's click.
 To add a display feature, extend the registry with its schema and validator,
 extend the native visual view, and test the same inputs through both the bridge
 and the Responses client. Preserve decoding of existing versioned figures.
-The provider can issue up to four terminal display calls per answer.
-Functions that need a result returned to the model require a separate
-continuation and authorization design.
+The provider can issue up to four calls in its tool-enabled response.
+Filing calls receive a local result in a second Responses request so the
+agent can complete the answer. That final request uses the selected provider,
+has tools disabled, and contributes to the displayed token usage.
 
+
+## Chat attachments and filing
+
+Chat messages can retain optional attachment records. Originals and extracted
+text are content-addressed backup payloads. A draft keeps its selected bytes
+in memory. The provider receives current uploads and a bounded set of files
+from recent messages in the same conversation. The user message has no
+per-message character ceiling. Request and library byte budgets still apply.
+
+The Responses client and the stdio bridge share the schema and validator for
+**propose_save_attachment**. A filing suggestion identifies an upload and
+a class by UUID. Desktop users can accept it, pick a destination themselves,
+or allow automatic filing of the current uploads when sending. LCP commits
+automatic filing with the completed turn and reuses identical current material.
+
+A local agent grant can separately enable attachment access for a full class
+scope. **list_chat_attachments** and **read_chat_attachment** expose the
+granted class chat’s uploads and extracted passages. External filing suggestions
+appear for review in that chat. University conversations stay private to the
+desktop. Revocation also applies to file tools.
 
 ## Capture
 

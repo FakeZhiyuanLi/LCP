@@ -7,6 +7,7 @@ import LCPContextCore
 import LCPContextServices
 
 struct UnsavedChatReply {
+    let automaticallyFileUploads: Bool
     let question: String
     let result: ClassPlanResult
     let profile: AgentProviderProfile
@@ -686,15 +687,16 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func saveChatReply(classID: UUID?, question: String, result: ClassPlanResult, profile: AgentProviderProfile,
-                       diagnostics: AgentRequestDiagnostics) -> Bool {
+                       diagnostics: AgentRequestDiagnostics, automaticallyFileUploads: Bool = false) -> Bool {
         diagnostics.chatStage(.save)
         do {
             try saveChatTurn(classID: classID, message: question, response: result.response.text, profile: profile,
-                             context: result.context, usage: result.response.usage, replyID: diagnostics.id)
+                             context: result.context, usage: result.response.usage, replyID: diagnostics.id,
+                             uploads: result.uploads, suggestions: result.response.filingSuggestions, automaticallyFileUploads: automaticallyFileUploads)
             unsavedChatReplies.removeValue(forKey: classID)
             return true
         } catch {
-            unsavedChatReplies[classID] = UnsavedChatReply(question: question, result: result, profile: profile,
+            unsavedChatReplies[classID] = UnsavedChatReply(automaticallyFileUploads: automaticallyFileUploads, question: question, result: result, profile: profile,
                                                           diagnostics: diagnostics, reason: error.localizedDescription,
                                                           errorDetails: diagnostics.saveFailureDetails(error))
             return false
@@ -702,16 +704,16 @@ final class WorkspaceModel: ObservableObject {
     }
 
     private func saveChatTurn(classID: UUID?, message: String, response: String, profile: AgentProviderProfile,
-                              context: ClassPlannerContext, usage: TokenUsage?, replyID: UUID) throws {
+                              context: ClassPlannerContext, usage: TokenUsage?, replyID: UUID,
+                              uploads: [ChatUpload], suggestions: [ChatFilingSuggestion], automaticallyFileUploads: Bool) throws {
         guard let repository else { throw DesktopUIError.message("The library is unavailable.") }
         let request = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let reply = response.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedIDs = Set(context.classIDs)
-        guard !request.isEmpty, request.utf8.count <= 4_096,
-              request.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil,
+        guard !request.isEmpty || !uploads.isEmpty,
+              request.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines).subtracting(CharacterSet(charactersIn: "\t"))) == nil,
               !reply.isEmpty, reply.utf8.count <= 262_144,
               reply.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil,
-              !context.classIDs.isEmpty,
               classID.map({ context.classIDs == [$0] }) ?? true,
               context.classIDs.count <= 32,
               Set(context.classIDs).count == context.classIDs.count,
@@ -722,8 +724,10 @@ final class WorkspaceModel: ObservableObject {
         }
         let now = Date.now
         let citations = context.sourceCitations
+        for upload in uploads { try upload.retain(in: repository) }
         let user = ChatMessage(role: .user, content: request, createdAt: now,
-                               contextClassIDs: context.classIDs, contextRevision: context.repositoryRevision)
+                               contextClassIDs: context.classIDs, contextRevision: context.repositoryRevision,
+                               attachments: uploads.isEmpty ? nil : uploads.map(\.attachment))
         let assistant = ChatMessage(id: replyID, role: .assistant, content: reply, createdAt: now,
                                     agentIdentity: profile.name, citations: citations,
                                     contextClassIDs: context.classIDs, contextRevision: context.repositoryRevision,
@@ -755,8 +759,17 @@ final class WorkspaceModel: ObservableObject {
                 throw DesktopUIError.message("This chat has reached its message limit. Start a new library backup before continuing.")
             }
             threads[index].messages.append(contentsOf: [user, assistant])
+            for suggestion in suggestions where selectedIDs.contains(suggestion.classID) {
+                ChatFilingTool.suggest(suggestion, in: &threads[index])
+            }
             threads[index].updatedAt = max(threads[index].updatedAt, now)
             state.chatThreads = threads
+            if automaticallyFileUploads {
+                let attachedNow = Set(uploads.map(\.id))
+                for suggestion in suggestions where attachedNow.contains(suggestion.attachmentID) && selectedIDs.contains(suggestion.classID) {
+                    try ChatFilingTool.file(suggestion.attachmentID, from: threads[index].id, to: suggestion.classID, in: &state)
+                }
+            }
         }
         do { try repository.update(appendTurn) }
         catch is AlreadySaved { /* The same reply was committed on a previous attempt. */ }
@@ -777,8 +790,8 @@ final class WorkspaceModel: ObservableObject {
             return
         }
         let request = objective.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !request.isEmpty, request.utf8.count <= 4_096,
-              request.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil else {
+        guard !request.isEmpty,
+              request.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines).subtracting(CharacterSet(charactersIn: "\t"))) == nil else {
             errorMessage = "The planning request is empty or invalid."
             return
         }

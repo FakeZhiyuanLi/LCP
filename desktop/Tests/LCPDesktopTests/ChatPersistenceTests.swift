@@ -48,6 +48,63 @@ final class ChatPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testLongChatAndFileOnlyTurnsPreserveOriginalsAndHonorPerMessageFiling() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = WorkspaceModel(arguments: ["--profile-root", root.path])
+        let repo = try XCTUnwrap(model.repository)
+        let course = ClassEnrollment(title: "Fictional astronomy")
+        try repo.update { $0.classes = [course] }
+        model.refresh()
+        let session = model.chatSession(for: nil)
+        let bytes = Data("Fictional astronomical tables.".utf8)
+        let url = root.appendingPathComponent("Tables.md")
+        try bytes.write(to: url)
+        await session.attach([url])
+        let upload = try XCTUnwrap(session.uploads.first)
+        XCTAssertTrue(session.canSend, "A file can start a turn on its own.")
+        XCTAssertTrue(model.chatSession(for: course.id).uploads.isEmpty)
+        try FileManager.default.removeItem(at: url)
+        let profile = AgentProviderProfile(name: "Fixture", baseURL: "https://example.invalid", model: "test")
+        let context = try ClassPlannerService(repository: repo).makeContext(classIDs: [course.id])
+        let suggestion = ChatFilingSuggestion(attachmentID: upload.id, classID: course.id, title: "Astronomical tables", reason: "Study reference")
+        let result = ClassPlanResult(response: .init(text: "File reviewed.", filingSuggestions: [suggestion]),
+                                     context: context, uploads: [upload])
+        let trace = AgentRequestDiagnostics()
+        XCTAssertTrue(model.saveChatReply(classID: nil, question: "", result: result, profile: profile, diagnostics: trace))
+        var thread = try XCTUnwrap(model.chatThread(classID: nil))
+        XCTAssertEqual(thread.messages[0].attachments?.first?.suggestion, suggestion)
+        XCTAssertTrue(repo.state.materials.isEmpty)
+        try ChatFilingTool.file(upload.id, from: thread.id, to: course.id, in: repo)
+        try ChatFilingTool.file(upload.id, from: thread.id, to: course.id, in: repo)
+        XCTAssertEqual(repo.state.materials.count, 1)
+        XCTAssertEqual(try repo.payloadData(upload.attachment.original), bytes)
+
+        let another = root.appendingPathComponent("Second.md")
+        try Data("A different fictional handout.".utf8).write(to: another)
+        let second = try ChatUpload.read(another)
+        let next = ChatFilingSuggestion(attachmentID: second.id, classID: course.id, title: "Second", reason: "Reference")
+        let auto = ClassPlanResult(response: .init(text: "Reviewed.", filingSuggestions: [next]), context: context, uploads: [second])
+        let longQuestion = String(repeating: "星\t", count: 100_000) + "last character"
+        let nextTrace = AgentRequestDiagnostics()
+        for _ in 0..<2 {
+            XCTAssertTrue(model.saveChatReply(classID: course.id, question: longQuestion, result: auto, profile: profile,
+                                              diagnostics: nextTrace, automaticallyFileUploads: true))
+        }
+        thread = try XCTUnwrap(model.chatThread(classID: course.id))
+        XCTAssertEqual(thread.messages.count, 2)
+        XCTAssertEqual(thread.messages[0].content, longQuestion)
+        XCTAssertNotNil(thread.messages[0].attachments?.first?.savedMaterialID)
+        XCTAssertEqual(repo.state.materials.count, 2)
+        let backup = root.appendingPathComponent("Backup")
+        try repo.exportBackup(to: backup)
+        let restored = try ContextRepository(rootURL: root.appendingPathComponent("Restored"))
+        try restored.restoreBackup(from: backup)
+        XCTAssertEqual(restored.state.chatThreads, repo.state.chatThreads)
+        XCTAssertEqual(try restored.payloadData(second.attachment.original), try Data(contentsOf: another))
+    }
+
+    @MainActor
     func testFailedCitationCommitKeepsCompletedReplyForOneLocalSave() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -26,7 +26,7 @@ struct BridgeAudit {
                   (info.fileSize ?? Int.max) <= 524_288 else { throw BridgeFailure("The local access audit is invalid.") }
             events = try JSONDecoder().decode([Event].self, from: Data(contentsOf: file))
         }
-        let recognized = known.contains(tool) || AgentDisplayTool(rawValue: tool) != nil
+        let recognized = known.contains(tool) || BridgeChatFiles.names.contains(tool) || AgentDisplayTool(rawValue: tool) != nil
         events.append(Event(at: Date(), grant: grant, tool: recognized ? tool : "unknown", outcome: outcome))
         // Keep the latest 2,048 access facts. This is operational retention,
         // separate from permanent reviewed class/activity history.

@@ -157,9 +157,13 @@ struct ProviderStreamParser {
         if text.isEmpty, !finalParts.isEmpty { try append(finalParts.joined(separator: "\n\n")) }
         let graphics = displays.markdown()
         if !graphics.isEmpty { try append((text.isEmpty ? "" : "\n\n") + graphics) }
+        let suggestions = displays.filingSuggestions
+        if text.isEmpty && !suggestions.isEmpty { try append(ChatFilingTool.reply) }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentProviderError.response(.noText) }
         onUpdate(AgentProviderStreamUpdate(text: text, requestID: requestID, usage: usage, finished: true))
-        return AgentProviderGenerationResult(text: text, requestID: requestID, usage: usage)
+        var result = AgentProviderGenerationResult(text: text, requestID: requestID, usage: usage, filingSuggestions: suggestions)
+        result.fileContinuation = displays.continuation
+        return result
     }
 
     private mutating func append(_ delta: String) throws {

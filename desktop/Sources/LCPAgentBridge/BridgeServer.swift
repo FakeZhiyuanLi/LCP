@@ -70,10 +70,11 @@ final class BridgeServer {
             case "ping": return success(id: id, result: .object([:]))
             case "tools/list":
                 guard initialized else { throw BridgeFailure("Initialize this connection first.") }
-                let (_, connection) = try activeGrant()
-                let definitions = try BridgeTools.definitions + BridgeTools.displayDefinitions()
+                let (grant, connection) = try activeGrant()
+                let definitions = try BridgeTools.definitions + BridgeTools.displayDefinitions() + BridgeChatFiles.definitions()
                 let tools = definitions.filter { definition in
                     let name = definition.object?["name"]?.string ?? ""
+                    if BridgeChatFiles.names.contains(name) { return BridgeChatFiles.allowed(grant, connection) }
                     if name == "propose_note" || name == "propose_study_log" { return connection.capabilities.contains(name) }
                     return connection.capabilities.contains("read_context")
                 }
@@ -175,6 +176,10 @@ final class BridgeServer {
 
     private func call(name: String, arguments args: [String: JSONValue]) throws -> JSONValue {
         let (grant, connection) = try activeGrant()
+        if BridgeChatFiles.names.contains(name) {
+            guard BridgeChatFiles.allowed(grant, connection) else { throw ContextServiceError.outOfScope }
+            return try BridgeChatFiles.call(name, args: args, repository: repository, grant: grant)
+        }
         let isProposal = name == "propose_note" || name == "propose_study_log"
         guard connection.capabilities.contains(isProposal ? name : "read_context") else {
             throw BridgeFailure("This connection does not have the requested capability.")

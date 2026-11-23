@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import LCPContextCore
 import LCPContextServices
 
@@ -7,6 +8,8 @@ struct ClassChatView: View {
     @ObservedObject var model: WorkspaceModel
     @ObservedObject private var session: ChatSession
     @State private var profiles: [AgentProviderProfile] = []
+    @State private var choosingFiles = false
+    @State private var hoveringFiles = false
     @State private var loadingContext = false
     @State private var contextTask: Task<Void, Never>?
 
@@ -25,7 +28,7 @@ struct ClassChatView: View {
 
     var body: some View {
         Group {
-            if profiles.isEmpty && messages.isEmpty && session.draft.isEmpty && !sending && unsavedReply == nil {
+            if profiles.isEmpty && messages.isEmpty && session.draft.isEmpty && session.uploads.isEmpty && !sending && unsavedReply == nil {
                 ScrollView {
                     VStack(spacing: 0) {
                         header
@@ -156,7 +159,7 @@ struct ClassChatView: View {
                     .foregroundStyle(WorkspacePalette.muted)
                     .lineLimit(2)
             } else if activeClassIDs.isEmpty {
-                Text(globalScope ? "Add an active class before starting the university chat." : "This class is not available in the library.")
+                Text(globalScope ? "You can start with a question or attach a file." : "This class is not available in the library.")
                     .font(.caption)
                     .foregroundStyle(WorkspacePalette.muted)
             } else {
@@ -209,19 +212,19 @@ struct ClassChatView: View {
                         .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WorkspacePalette.line) }
                     } else {
                         ForEach(messages) { message in
-                            ChatMessageBubble(message: message) { citation in
+                            ChatMessageBubble(model: model, threadID: model.chatThread(classID: session.classID)?.id, message: message) { citation in
                                 model.presentedCitation = citation
                             }
                             .id(message.id)
                         }
                         if let generation = session.generation {
-                            pendingUserBubble(generation.question)
+                            pendingUserBubble(generation.question, filenames: generation.filenames)
                                 .id("lcp-chat-pending-user")
                             StreamingMessageBubble(text: generation.update?.text ?? "", provider: generation.providerName,
                                                    usage: generation.update?.usage, requestID: generation.update?.requestID)
                                 .id(streamingBubbleID)
                         } else if let unsavedReply {
-                            pendingUserBubble(unsavedReply.question, status: "unsaved")
+                            pendingUserBubble(unsavedReply.question, filenames: unsavedReply.result.uploads.map(\.attachment.filename), status: "unsaved")
                             StreamingMessageBubble(text: unsavedReply.result.response.text, provider: unsavedReply.profile.name,
                                                    usage: unsavedReply.result.response.usage, requestID: unsavedReply.result.response.requestID,
                                                    badge: "unsaved")
@@ -242,7 +245,7 @@ struct ClassChatView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func pendingUserBubble(_ request: String, status: String = "sending") -> some View {
+    private func pendingUserBubble(_ request: String, filenames: [String], status: String = "sending") -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 7) {
                 Image(systemName: "person.fill")
@@ -253,9 +256,10 @@ struct ClassChatView: View {
                     .font(.caption2)
                     .foregroundStyle(WorkspacePalette.muted)
             }
-            Text(request)
-                .font(.body)
-                .textSelection(.enabled)
+            if !request.isEmpty { Text(verbatim: request).font(.body).textSelection(.enabled) }
+            ForEach(Array(filenames.enumerated()), id: \.offset) { _, name in
+                Label(name, systemImage: "paperclip").font(.callout)
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -293,6 +297,32 @@ struct ClassChatView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 9) {
+            if !session.uploads.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(session.uploads) { upload in
+                            HStack(spacing: 6) {
+                                Image(systemName: "doc")
+                                Text(upload.attachment.filename).lineLimit(1)
+                                Button {
+                                    session.uploads.removeAll { $0.id == upload.id }
+                                    if session.uploads.isEmpty { session.automaticallyFileUploads = false }
+                                } label: { Image(systemName: "xmark.circle.fill") }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Remove \(upload.attachment.filename)")
+                            }
+                            .font(.callout).padding(.horizontal, 9).padding(.vertical, 5)
+                            .background(WorkspacePalette.tintSurface, in: Capsule())
+                            .help(upload.contentDescription)
+                        }
+                    }
+                }.scrollIndicators(.hidden)
+                if !activeClassIDs.isEmpty {
+                    Toggle("Let the agent file these uploads in class materials", isOn: $session.automaticallyFileUploads)
+                        .toggleStyle(.checkbox).font(.caption)
+                        .help("Applies to files in this message and classes in this conversation.")
+                }
+            }
             ZStack(alignment: .topLeading) {
                 if session.draft.isEmpty && !sending {
                     Text(globalScope ? "Ask about your university context…" : "Ask about this class…")
@@ -313,6 +343,14 @@ struct ClassChatView: View {
             .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(sending ? WorkspacePalette.accent : WorkspacePalette.line, lineWidth: sending ? 1.5 : 1) }
             statusRow
             HStack(alignment: .center, spacing: 10) {
+                Button { choosingFiles = true } label: {
+                    Label("Attach Files…", systemImage: "paperclip").labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .help("Attach files to this message")
+                .accessibilityLabel("Attach files")
+                .disabled(sending || session.loadingFiles || unsavedReply != nil)
+                if session.loadingFiles { ProgressView().controlSize(.small) }
                 Menu {
                     if profiles.isEmpty {
                         Button("Add BYOK Provider…", systemImage: "key") { model.presentedEditor = .newBYOKProvider }
@@ -338,14 +376,11 @@ struct ClassChatView: View {
                 .frame(maxWidth: 280, alignment: .leading)
                 .accessibilityLabel("Agent provider")
                 if session.status == nil {
-                    Text("Enter to ask LCP about the saved context")
+                    Text("⌘ Return to send")
                         .font(.caption2)
                         .foregroundStyle(WorkspacePalette.muted)
                 }
                 Spacer(minLength: 8)
-                Text("\(session.draft.utf8.count)/4,096")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(session.draft.utf8.count > 4_096 ? .red : WorkspacePalette.muted)
                 if sending {
                     Button("Stop", systemImage: "stop.fill") { session.stop() }
                         .buttonStyle(.bordered)
@@ -355,7 +390,7 @@ struct ClassChatView: View {
                         if let selectedProfile { session.send(in: model, using: selectedProfile) }
                     }
                         .buttonStyle(.borderedProminent)
-                        .disabled(unsavedReply != nil || activeClassIDs.isEmpty || selectedProfile == nil || session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(unsavedReply != nil || selectedProfile == nil || !session.canSend)
                         .keyboardShortcut(.return, modifiers: [.command])
                 }
             }
@@ -366,6 +401,18 @@ struct ClassChatView: View {
         .frame(maxWidth: 920, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
+        .overlay { if hoveringFiles { RoundedRectangle(cornerRadius: 12).strokeBorder(WorkspacePalette.accent, lineWidth: 2).allowsHitTesting(false) } }
+        .fileImporter(isPresented: $choosingFiles, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls): Task { await session.attach(urls) }
+            case .failure(let error): if (error as NSError).code != NSUserCancelledError { session.status = error.localizedDescription }
+            }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard !sending, !session.loadingFiles, unsavedReply == nil, !urls.isEmpty, urls.allSatisfy(\.isFileURL) else { return false }
+            Task { await session.attach(urls) }
+            return true
+        } isTargeted: { hoveringFiles = $0 }
     }
 
     @ViewBuilder private var statusRow: some View {
@@ -376,7 +423,8 @@ struct ClassChatView: View {
                 HStack {
                     Button("Retry Save") {
                         session.saveReply(in: model, question: unsavedReply.question, result: unsavedReply.result,
-                                          profile: unsavedReply.profile, diagnostics: unsavedReply.diagnostics)
+                                          profile: unsavedReply.profile, diagnostics: unsavedReply.diagnostics,
+                                          automaticallyFileUploads: unsavedReply.automaticallyFileUploads)
                     }
                     Button("Copy Reply") {
                         NSPasteboard.general.clearContents()
@@ -563,6 +611,8 @@ private struct StreamingMessageBubble: View {
 }
 
 private struct ChatMessageBubble: View {
+    @ObservedObject var model: WorkspaceModel
+    let threadID: UUID?
     let message: ChatMessage
     let openCitation: (SourceCitation) -> Void
 
@@ -586,7 +636,12 @@ private struct ChatMessageBubble: View {
             if message.role == .assistant {
                 AgentOutputView(source: message.content)
             } else {
-                Text(verbatim: message.content).textSelection(.enabled)
+                if !message.content.isEmpty { Text(verbatim: message.content).textSelection(.enabled) }
+                if let threadID {
+                    ForEach(message.attachments ?? []) { file in
+                        ChatFileRow(model: model, threadID: threadID, file: file)
+                    }
+                }
             }
             if !message.citations.isEmpty {
                 DisclosureGroup("Sources · \(message.citations.count)") {

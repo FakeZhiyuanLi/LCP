@@ -74,6 +74,11 @@ final class ChatNavigationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let (model, course, profile) = try makeWorkspace(at: root)
         let session = model.chatSession(for: course.id)
+        let attachment = root.appendingPathComponent("Fictional notes.md")
+        try Data("Fictional stars".utf8).write(to: attachment)
+        await session.attach([attachment])
+        let fileID = try XCTUnwrap(session.uploads.first?.id)
+        session.automaticallyFileUploads = true
         session.draft = "A question for class."
         session.send(in: model, using: profile)
         try await waitFor("stream before Stop") { session.generation?.update != nil }
@@ -81,6 +86,9 @@ final class ChatNavigationTests: XCTestCase {
         try await waitFor("stopped") { session.generation == nil }
         XCTAssertEqual(session.draft, "A question for class.")
         XCTAssertTrue(session.status?.contains("cancelled") == true)
+        XCTAssertEqual(session.uploads.map(\.id), [fileID])
+        XCTAssertTrue(session.automaticallyFileUploads)
+        XCTAssertTrue(model.chatSession(for: nil).uploads.isEmpty)
         session.send(in: model, using: profile)
         try await waitFor("second stream") { session.generation?.update != nil && PausedChatStream.requests.count == 2 }
         model.selection = .universityChat

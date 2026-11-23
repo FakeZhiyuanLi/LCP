@@ -435,6 +435,58 @@ final class BridgeServerTests: XCTestCase {
     }
 
 
+    @MainActor
+    func testFileToolsRequireAFullOptedInClassGrantAndLeaveFilingForTheStudent() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let repo = fixture.repository
+        let url = fixture.root.appendingPathComponent("Fictional syllabus.md")
+        try Data("Orbital mechanics marker.".utf8).write(to: url)
+        let upload = try ChatUpload.read(url)
+        let universityFile = try ChatUpload.read(url)
+        try upload.retain(in: repo)
+        try repo.update { state in
+            state.chatThreads = [
+                ChatThread(classID: fixture.classID, title: "Class", messages: [
+                    ChatMessage(role: .user, content: "", contextClassIDs: [fixture.classID], attachments: [upload.attachment])]),
+                ChatThread(classID: nil, title: "University", messages: [
+                    ChatMessage(role: .user, content: "", contextClassIDs: [fixture.classID], attachments: [universityFile.attachment])])
+            ]
+        }
+        let server = BridgeServer(repository: repo, grantID: fixture.grant.id)
+        _ = server.handle(request(1, "initialize"))
+        func tools() -> [String] {
+            server.handle(request(2, "tools/list"))?.object?["result"]?.object?["tools"]?.array?.compactMap { $0.object?["name"]?.string } ?? []
+        }
+        func call(_ name: String, _ args: [String: JSONValue]) -> JSONValue? {
+            server.handle(request(3, "tools/call", ["name": .string(name), "arguments": .object(args)]))
+        }
+        let classArg: [String: JSONValue] = ["class_id": .string(fixture.classID.uuidString)]
+        var args = classArg
+        args["attachment_id"] = .string(upload.id.uuidString)
+        XCTAssertFalse(tools().contains("read_chat_attachment"))
+        XCTAssertEqual(call("list_chat_attachments", classArg)?.object?["result"]?.object?["isError"], .bool(true))
+        try repo.update { $0.connections[0].capabilities.append(ChatFilingTool.name) }
+        XCTAssertTrue(tools().contains(ChatFilingTool.name))
+        let listed = try resultText(call("list_chat_attachments", classArg))
+        XCTAssertEqual(listed.object?["total"]?.integer, 1)
+        XCTAssertEqual(try resultText(call("read_chat_attachment", args)).object?["text"]?.string, "Orbital mechanics marker.")
+        var wrong = args
+        wrong["attachment_id"] = .string(universityFile.id.uuidString)
+        XCTAssertEqual(call("read_chat_attachment", wrong)?.object?["result"]?.object?["isError"], .bool(true))
+        args["title"] = .string("Orbit guide")
+        args["reason"] = .string("Reference for the lab.")
+        let materials = repo.state.materials
+        _ = try resultText(call(ChatFilingTool.name, args))
+        XCTAssertEqual(repo.state.chatThreads?.first?.messages.first?.attachments?.first?.suggestion?.title, "Orbit guide")
+        XCTAssertEqual(repo.state.materials, materials)
+        try repo.update { $0.grants[0].eventFrom = Date.distantPast }
+        XCTAssertFalse(tools().contains(ChatFilingTool.name))
+        XCTAssertEqual(call(ChatFilingTool.name, args)?.object?["result"]?.object?["isError"], .bool(true))
+        try repo.update { $0.grants[0].eventFrom = nil; $0.grants[0].revokedAt = Date() }
+        XCTAssertEqual(call("list_chat_attachments", classArg)?.object?["result"]?.object?["isError"], .bool(true))
+    }
+
     private func request(_ id:Int,_ method:String,_ params:[String:JSONValue]=[:])->JSONValue {
         .object(["jsonrpc":.string("2.0"),"id":.number(Double(id)),"method":.string(method),"params":.object(params)])
     }

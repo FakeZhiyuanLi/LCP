@@ -22,6 +22,7 @@ final class ChatSession: ObservableObject {
         let id: UUID
         let question: String
         let providerName: String
+        let filenames: [String]
         let startedAt = Date()
         var phase = Phase.preparing
         var update: AgentProviderStreamUpdate?
@@ -43,6 +44,38 @@ final class ChatSession: ObservableObject {
 
     let classID: UUID?
     @Published var draft = ""
+    @Published var uploads: [ChatUpload] = []
+    @Published var automaticallyFileUploads = false
+    @Published private(set) var loadingFiles = false
+    var canSend: Bool { !loadingFiles && (!uploads.isEmpty || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+
+    func attach(_ urls: [URL]) async {
+        guard !urls.isEmpty, !loadingFiles, generation == nil else { return }
+        guard urls.count <= ChatAttachment.maximumCount - uploads.count else {
+            status = "Attach up to \(ChatAttachment.maximumCount) files per message."
+            return
+        }
+        loadingFiles = true
+        defer { loadingFiles = false }
+        let remaining = ChatAttachment.maximumBytes - uploads.reduce(0) { $0 + Int($1.attachment.original.byteCount) }
+        do {
+            let added = try await Task.detached(priority: .userInitiated) { [remaining] in
+                var budget = remaining
+                var result: [ChatUpload] = []
+                for url in urls {
+                    let file = try ChatUpload.read(url, remainingBytes: budget)
+                    budget -= Int(file.attachment.original.byteCount)
+                    result.append(file)
+                }
+                return result
+            }.value
+            uploads.append(contentsOf: added)
+            status = nil
+            errorDetails = nil
+        } catch ContextServiceError.fileTooLarge {
+            status = "Attachments can total up to 32 MiB per message."
+        } catch { status = error.localizedDescription }
+    }
     @Published var selectedProfileID: UUID?
     @Published var context: ContextSummary?
     @Published var status: String?
@@ -57,27 +90,22 @@ final class ChatSession: ObservableObject {
     }
 
     func send(in model: WorkspaceModel, using profile: AgentProviderProfile) {
-        guard generation == nil, model.unsavedChatReplies[classID] == nil,
+        guard canSend, generation == nil, model.unsavedChatReplies[classID] == nil,
               !model.restorePending, let repository = model.repository else { return }
         let ids = classIDs(in: model)
         errorDetails = nil
-        guard !ids.isEmpty else {
-            status = "No class context is available for this chat."
-            return
-        }
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !question.isEmpty, question.utf8.count <= 4_096 else {
-            status = "Keep each chat message under 4,096 bytes."
-            return
-        }
-
+        let files = uploads
+        let autoFile = automaticallyFileUploads && !files.isEmpty
         let history = model.chatThread(classID: classID)?.messages ?? []
         let root = model.rootURL
         let providers = model.chatProviders
         let diagnostics = AgentRequestDiagnostics()
         let id = diagnostics.id
-        generation = Generation(id: id, question: question, providerName: profile.name)
+        generation = Generation(id: id, question: question, providerName: profile.name, filenames: files.map(\.attachment.filename))
         draft = ""
+        uploads = []
+        automaticallyFileUploads = false
         status = nil
 
         task = Task { [self, weak model] in
@@ -95,7 +123,7 @@ final class ChatSession: ObservableObject {
                 stage = .generation
                 let result = try await ClassPlannerService(repository: repository, http: providers.http).generateChatStream(
                     classIDs: ids, history: history, message: question, profile: profile, apiKey: key,
-                    diagnostics: diagnostics, onRequestReady: {
+                    uploads: files, diagnostics: diagnostics, onRequestReady: {
                         self.generation?.phase = .waiting
                     }, onUpdate: { update in
                         DispatchQueue.main.async { [weak self] in
@@ -108,9 +136,12 @@ final class ChatSession: ObservableObject {
                     })
                 try Task.checkCancellation()
                 guard let model, model.repository === repository, model.rootURL == root else { return }
-                saveReply(in: model, question: question, result: result, profile: profile, diagnostics: diagnostics)
+                saveReply(in: model, question: question, result: result, profile: profile, diagnostics: diagnostics,
+                          automaticallyFileUploads: autoFile)
             } catch {
                 draft = question
+                uploads = files
+                automaticallyFileUploads = autoFile
                 if Task.isCancelled || error is CancellationError {
                     status = "Generation cancelled. Your message is back in the composer."
                 } else {
@@ -129,8 +160,9 @@ final class ChatSession: ObservableObject {
     }
 
     func saveReply(in model: WorkspaceModel, question: String, result: ClassPlanResult,
-                   profile: AgentProviderProfile, diagnostics: AgentRequestDiagnostics) {
-        if model.saveChatReply(classID: classID, question: question, result: result, profile: profile, diagnostics: diagnostics) {
+                   profile: AgentProviderProfile, diagnostics: AgentRequestDiagnostics, automaticallyFileUploads: Bool = false) {
+        if model.saveChatReply(classID: classID, question: question, result: result, profile: profile, diagnostics: diagnostics,
+                               automaticallyFileUploads: automaticallyFileUploads) {
             context = ContextSummary(result.context)
         }
     }

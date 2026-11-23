@@ -146,6 +146,7 @@ public final class ContextRepository {
             try prepareRecordingAssociations(&next, previous: previous)
             try prepareActivities(&next, previous: previous)
             try preserveImmutableHistory(previous: previous, next: next)
+            try verifyChatAttachmentPayloads(previous: previous, next: next)
             for revision in next.materialRevisions where !previous.materialRevisions.contains(where: { $0.id == revision.id }) {
                 _ = try readPayload(revision.original)
                 if let text = revision.text { _ = try readPayload(text) }
@@ -468,6 +469,23 @@ public final class ContextRepository {
         }
     }
 
+    private func verifyChatAttachmentPayloads(previous: ContextState, next: ContextState) throws {
+        let before = (previous.chatThreads ?? []).flatMap { $0.messages.flatMap { $0.attachments ?? [] } }
+        let byID = Dictionary(before.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for thread in next.chatThreads ?? [] {
+            for file in thread.messages.flatMap({ $0.attachments ?? [] }) {
+                if let old = byID[file.id] {
+                    guard old.filename == file.filename, old.original == file.original, old.text == file.text else {
+                        throw ContextRepositoryError.invalidState("the original chat attachment changed")
+                    }
+                } else {
+                    _ = try readPayload(file.original)
+                    if let text = file.text { _ = try readPayload(text) }
+                }
+            }
+        }
+    }
+
     private func preserveImmutableHistory(previous: ContextState, next: ContextState) throws {
         func unchanged<T: Identifiable & Equatable>(_ old: [T], _ new: [T]) throws where T.ID == UUID {
             let lookup = Dictionary(new.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -620,8 +638,9 @@ public final class ContextRepository {
     nonisolated private static func allPayloads(_ state: ContextState) throws -> [PayloadReference] {
         let references = state.materialRevisions.flatMap { [$0.original] + [$0.text].compactMap { $0 } }
             + state.activityRevisions.map(\.content) + state.transcriptRevisions.map(\.content) + state.pinnedPayloads
+        let attachments = (state.chatThreads ?? []).flatMap { $0.messages.flatMap { $0.attachments ?? [] } }
         var unique: [String: PayloadReference] = [:]
-        for reference in references {
+        for reference in references + attachments.map(\.original) + attachments.compactMap(\.text) {
             if let existing = unique[reference.sha256], existing.byteCount != reference.byteCount {
                 throw ContextRepositoryError.invalidPayload
             }
@@ -828,6 +847,7 @@ public final class ContextRepository {
             }
         }
         var chatMessageIDs: Set<UUID> = []
+        var attachmentIDs = Set<UUID>()
         for thread in chatThreads {
             guard thread.classID.map(classIDs.contains) ?? true,
                   !thread.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -839,12 +859,25 @@ public final class ContextRepository {
                 throw ContextRepositoryError.invalidState("chat thread metadata is invalid")
             }
             for message in thread.messages {
+                let files = message.attachments ?? []
+                guard files.count <= ChatAttachment.maximumCount, files.isEmpty || message.role == .user else {
+                    throw ContextRepositoryError.invalidState("invalid chat attachments")
+                }
+                var totalBytes: UInt64 = 0
+                for file in files {
+                    guard attachmentIDs.insert(file.id).inserted, ChatAttachment.validFilename(file.filename),
+                          file.original.byteCount <= UInt64(ChatAttachment.maximumBytes) - totalBytes,
+                          file.suggestion.map({ $0.isValid && $0.attachmentID == file.id && message.contextClassIDs.contains($0.classID) }) ?? true else {
+                        throw ContextRepositoryError.invalidState("invalid chat attachment or filing suggestion")
+                    }
+                    totalBytes += file.original.byteCount
+                }
                 guard chatMessageIDs.insert(message.id).inserted,
-                      message.content.utf8.count <= 262_144,
-                      !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                      message.content.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil,
+                      message.role == .user || message.content.utf8.count <= 262_144,
+                      !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !files.isEmpty,
+                      message.content.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines).subtracting(CharacterSet(charactersIn: "\t"))) == nil,
                       message.createdAt.timeIntervalSinceReferenceDate.isFinite,
-                      !message.contextClassIDs.isEmpty,
+                      !message.contextClassIDs.isEmpty || thread.classID == nil,
                       message.contextClassIDs.count <= 32,
                       message.citations.count <= 128,
                       Set(message.contextClassIDs).count == message.contextClassIDs.count,

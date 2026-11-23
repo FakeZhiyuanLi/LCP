@@ -4,7 +4,7 @@ import LCPContextServices
 /// Deliberately narrow tools. There are no capture, deadline, grade, network or
 /// transcription controls, nor a tool for accepting a proposal.
 enum BridgeTools {
-    private static let uuid: JSONValue = .object(["type": .string("string"), "format": .string("uuid")])
+    static let uuid: JSONValue = .object(["type": .string("string"), "format": .string("uuid")])
     private static let text: JSONValue = .object(["type": .string("string")])
     private static let instant: JSONValue = .object(["type": .string("string"), "format": .string("date-time"), "maxLength": .number(64)])
     private static let citation: JSONValue = .object(["type": .string("object")])
@@ -37,10 +37,10 @@ enum BridgeTools {
             ])
         }
     }
-    private static func integer(_ low:Int,_ high:Int)->JSONValue {
+    static func integer(_ low:Int,_ high:Int)->JSONValue {
         .object(["type":.string("integer"),"minimum":.number(Double(low)),"maximum":.number(Double(high))])
     }
-    private static func tool(_ name:String,_ description:String,_ properties:[String:JSONValue],_ required:[String])->JSONValue {
+    static func tool(_ name:String,_ description:String,_ properties:[String:JSONValue],_ required:[String])->JSONValue {
         .object(["name":.string(name),"description":.string(description),
                  "annotations":.object(["readOnlyHint":.bool(!name.hasPrefix("propose_") && name != "build_context_bundle"),
                                          "destructiveHint":.bool(false),"idempotentHint":.bool(name != "build_context_bundle"),
