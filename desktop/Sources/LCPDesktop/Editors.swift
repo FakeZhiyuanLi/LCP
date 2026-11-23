@@ -16,12 +16,14 @@ struct EditorFrame<Content: View>: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Text(title).font(.title2.bold()); Spacer() }.padding(24)
+            HStack { Text(title).font(.title2.weight(.semibold)).foregroundStyle(WorkspacePalette.ink).accessibilityAddTraits(.isHeader); Spacer() }.padding(24)
             content.frame(maxWidth: .infinity, maxHeight: .infinity).padding(.horizontal, 24)
             Divider()
             HStack { Spacer(); Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction); Button(saveLabel, action: save).keyboardShortcut(.defaultAction).disabled(!canSave) }.padding(20)
         }
         .frame(width: width, height: height)
+        .background(WorkspacePalette.canvas)
+        .tint(WorkspacePalette.accent)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
         .accessibilityAddTraits(.isModal)
@@ -263,12 +265,7 @@ private struct ClassEditorCard<Content: View>: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(WorkspacePalette.line.opacity(0.72))
-                .allowsHitTesting(false)
-        }
+        .workspacePanel()
     }
 }
 

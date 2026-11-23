@@ -33,6 +33,13 @@ struct CourseSectionPicker: View {
             ViewThatFits(in: .horizontal) {
                 row(showsSymbols: true)
                 row(showsSymbols: false)
+                Picker("Class section", selection: $selection) {
+                    ForEach(CourseSection.allCases, id: \.self) { section in
+                        Label(section.rawValue, systemImage: section.symbol).tag(section)
+                    }
+                }
+                .pickerStyle(.menu)
+                .fixedSize()
             }
             Spacer(minLength: 0)
         }
@@ -54,11 +61,17 @@ struct CourseSectionPicker: View {
                     .padding(.horizontal, 9).padding(.vertical, 7)
                     .foregroundStyle(section == selection ? WorkspacePalette.accent : WorkspacePalette.ink)
                     .background(section == selection ? WorkspacePalette.tintSurface : .clear, in: Capsule())
+                    .overlay {
+                        if focused == section {
+                            Capsule().strokeBorder(WorkspacePalette.accent, lineWidth: 1.5).allowsHitTesting(false)
+                        }
+                    }
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .focusable(true, interactions: .edit)
                 .focused($focused, equals: section)
+                .focusEffectDisabled()
                 .accessibilityAddTraits(section == selection ? .isSelected : [])
                 .onKeyPress(.leftArrow) { move(from: section, by: -1) }
                 .onKeyPress(.rightArrow) { move(from: section, by: 1) }

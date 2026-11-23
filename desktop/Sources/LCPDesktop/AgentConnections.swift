@@ -17,8 +17,11 @@ struct AgentConnectionsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                Text("Choose what your agents can see.").font(.largeTitle.bold())
-                Text("LCP keeps the source context. Each local agent connection receives an explicit class scope. A snapshot export is a separate, deliberate sharing route.").font(.title3).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Agent Connections").workspacePageTitle()
+                    Text("Connect a chat provider or choose which classes a local agent can access.")
+                        .font(.callout).foregroundStyle(WorkspacePalette.muted)
+                }
                 HStack(spacing: 10) {
                     Button("New Local Agent Grant…", systemImage: "plus") { model.presentedEditor = .newAgentGrant }
                         .buttonStyle(.borderedProminent)
@@ -42,7 +45,9 @@ struct AgentConnectionsView: View {
                     }
                 }
                 if model.state.connections.isEmpty {
-                    ContentUnavailableView("No Agent Connections", systemImage: "point.3.connected.trianglepath.dotted", description: Text("Create a scoped local MCP grant for a compatible client, or export a selected class's context from its toolbar. No subscription is required to maintain your library."))
+                    ContentUnavailableView("No local agent grants", systemImage: "point.3.connected.trianglepath.dotted", description: Text("Create a grant to let an MCP client read selected classes."))
+                        .frame(maxWidth: .infinity)
+                        .workspacePanel()
                 }
                 ForEach(model.state.connections) { connection in
                     GroupBox {
@@ -60,15 +65,17 @@ struct AgentConnectionsView: View {
                         }.padding(8)
                     }
                 }
-                GroupBox("Use a class snapshot with Grok Bot") {
+                DisclosureGroup("Share class context with an external agent") {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Select a class and choose Export Class Context. Review the materials, dates, and exported context.md, then attach that file in Grok Bot using Attach files.").foregroundStyle(.secondary)
                         Text("Ask for the exact LCP citation and open it on this Mac to check the answer. End-to-end retrieval in Grok Bot is awaiting verification.").font(.caption).foregroundStyle(.secondary)
                         Text("For an MCP-capable client such as OpenAI Dots or Claude Duet, open MCP JSON on the matching grant and copy the credential-free stdio configuration. LCP records the client label and verification time after its first successful scoped read.").font(.caption).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
                 }
+                .padding(16)
+                .workspacePanel()
                 Text("Revocation prevents future local tool requests. It cannot recall context already sent to an external agent. Connection secrets are not included in exports; the local stdio bridge does not require provider credentials.").font(.caption).foregroundStyle(.secondary)
-            }.padding(28).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
+            }.workspacePage()
         }.navigationTitle("Agent Connections")
             .onAppear(perform: refreshProviderProfiles)
             .onChange(of: model.rootURL) { _, _ in refreshProviderProfiles() }
@@ -476,18 +483,18 @@ struct ProposalReviewView: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Review Agent Proposals").font(.largeTitle.bold())
-                    Text("An agent's output becomes durable class history only after you accept it.").foregroundStyle(.secondary)
+                    Text("Review Proposals").workspacePageTitle()
+                    Text("Review suggested notes and corrections before adding them to class history.").font(.callout).foregroundStyle(WorkspacePalette.muted)
                 }
                 Spacer(); Toggle("Show Reviewed", isOn: $includeReviewed).toggleStyle(.checkbox)
-            }.padding(.top, 10)
+            }
             if proposals.isEmpty { ContentUnavailableView("No Proposals to Review", systemImage: "checkmark.bubble", description: Text("A connection with proposal permission can suggest a note or study log. You can also manually save a selected agent answer in class history.")) }
             else {
                 List(proposals) { proposal in
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Text(model.state.classes.first { $0.id == proposal.classID }?.shortLabel ?? "Unknown Class").font(.caption.bold()).foregroundStyle(.tint)
-                            Label(proposal.agentIdentity, systemImage: "sparkles").font(.caption).foregroundStyle(.purple)
+                            Label(proposal.agentIdentity, systemImage: "sparkles").font(.caption).foregroundStyle(WorkspacePalette.accent)
                             Spacer(); Text(proposal.state.capitalized).font(.caption).foregroundStyle(.secondary)
                         }
                         Text(proposal.title).font(.headline)
@@ -512,10 +519,13 @@ struct ProposalReviewView: View {
                                     .accessibilityLabel("Accept proposal \(proposal.title) from \(proposal.agentIdentity) into \(classIdentity(proposal.classID)) history")
                             }
                         }
-                    }.padding(.vertical, 14)
-                }.listStyle(.inset)
+                    }.workspaceListRow()
+                }.listStyle(.plain).scrollContentBackground(.hidden)
             }
-        }.padding(24).navigationTitle("Review Proposals")
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .workspacePage()
+        .navigationTitle("Review Proposals")
     }
     private func classIdentity(_ id: UUID) -> String {
         guard let enrollment = model.state.classes.first(where: { $0.id == id }) else { return "unavailable class" }

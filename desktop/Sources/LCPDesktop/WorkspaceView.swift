@@ -24,8 +24,8 @@ struct WorkspaceView: View {
                         } else { WelcomeView(model: model) }
                     case .capture: CaptureWorkspaceView(model: model)
                     case .universityConnections: ConnectionsOverview(model: model).id(model.rootURL)
-                    case .planner: ClassPlannerView(model: model, globalScope: true)
-                    case .universityChat: ClassChatView(model: model).id(model.rootURL)
+                    case .planner: ClassPlannerView(model: model, globalScope: true).navigationTitle("Study Planner")
+                    case .universityChat: ClassChatView(model: model).id(model.rootURL).navigationTitle("University Chat")
                     case .connections: AgentConnectionsView(model: model)
                     case .review: ProposalReviewView(model: model)
                     default: WelcomeView(model: model)
@@ -106,6 +106,7 @@ private struct WorkspaceSidebar: View {
     @ObservedObject var model: WorkspaceModel
     @Environment(\.controlActiveState) private var controlActiveState
     @FocusState private var focusedRoute: WorkspaceRoute?
+    @State private var hoveredRoute: WorkspaceRoute?
 
     private var visibleRoutes: [WorkspaceRoute] {
         [.welcome, .capture, .universityConnections] + model.visibleClassGroups.flatMap { group in
@@ -163,7 +164,7 @@ private struct WorkspaceSidebar: View {
                                     .contextMenu { ClassMenuItems(model: model, enrollment: course, includeOpen: true) }
                             }
                         }
-                        Text("Agent Access")
+                        Text("Study Tools")
                             .font(.system(size: 11, weight: .semibold)).foregroundStyle(WorkspacePalette.muted)
                             .padding(.leading, 9).padding(.top, 20).padding(.bottom, 4)
                             .accessibilityAddTraits(.isHeader)
@@ -171,7 +172,7 @@ private struct WorkspaceSidebar: View {
                             .contextMenu {
                                 Button("Open Study Planner") { model.selection = .planner }
                             }
-                        row(.universityChat, title: "University Chat", icon: "bubble.left.and.bubble.right.fill")
+                        row(.universityChat, title: "University Chat", icon: "bubble.left.and.bubble.right")
                             .contextMenu {
                                 Button("Open University Chat") { model.openUniversityChat() }
                             }
@@ -202,12 +203,15 @@ private struct WorkspaceSidebar: View {
             }
             Divider()
             SettingsLink {
-                Label("Settings", systemImage: "gearshape")
-                    .font(.system(size: 13))
-                    .foregroundStyle(WorkspacePalette.ink)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 9).padding(.vertical, 8)
-                    .contentShape(Rectangle())
+                HStack(spacing: 10) {
+                    Image(systemName: "gearshape").font(.system(size: 14, weight: .medium))
+                        .frame(width: 24).foregroundStyle(WorkspacePalette.muted)
+                    Text("Settings").font(.system(size: 13))
+                }
+                .foregroundStyle(WorkspacePalette.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 9).padding(.vertical, 8)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .contextMenu {
@@ -227,6 +231,7 @@ private struct WorkspaceSidebar: View {
                     Text("Archived").font(.caption).foregroundStyle(WorkspacePalette.ink)
                 }
                 .toggleStyle(.checkbox)
+                .help("Show archived classes and terms")
             }
             .padding(.horizontal, 17).padding(.vertical, 12)
         }
@@ -237,13 +242,14 @@ private struct WorkspaceSidebar: View {
     }
 
     @ViewBuilder private var createItems: some View {
-        Button("New Class…") { model.presentedEditor = .newClass }
-        Button("New Term…") { model.presentedEditor = .newTerm }
+        Button("New Class…", systemImage: "plus") { model.presentedEditor = .newClass }
+        Button("New Term…", systemImage: "calendar.badge.plus") { model.presentedEditor = .newTerm }
     }
 
     private func row(_ route: WorkspaceRoute, title: String, subtitle: String? = nil,
                      icon: String, count: Int = 0) -> some View {
         let selected = model.selection == route
+        let fill = selected ? WorkspacePalette.tintSurface : (hoveredRoute == route ? WorkspacePalette.tintSurface.opacity(0.5) : .clear)
         let outline = RoundedRectangle(cornerRadius: 8, style: .continuous)
         let accessibilityName = [title, subtitle, count > 0 ? "\(count) pending" : nil].compactMap { $0 }.joined(separator: ", ")
         return Button {
@@ -272,7 +278,7 @@ private struct WorkspaceSidebar: View {
             }
             .padding(.horizontal, 9).padding(.vertical, subtitle == nil ? 8 : 9)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(selected ? WorkspacePalette.tintSurface : WorkspacePalette.surface, in: outline)
+            .background(fill, in: outline)
             .overlay(alignment: .leading) {
                 if selected {
                     Capsule().fill(WorkspacePalette.accent).frame(width: 3, height: 15)
@@ -288,6 +294,9 @@ private struct WorkspaceSidebar: View {
             .contentShape(outline)
         }
         .buttonStyle(.plain)
+        .onHover { inside in
+            if inside { hoveredRoute = route } else if hoveredRoute == route { hoveredRoute = nil }
+        }
         .focusable(true, interactions: .edit)
         .focused($focusedRoute, equals: route)
         .focusEffectDisabled()
@@ -321,15 +330,13 @@ struct WelcomeView: View {
         let recent = materials.sorted { $0.createdAt > $1.createdAt }.prefix(5)
 
         GeometryReader { viewport in
-            let gridWidth = min(viewport.size.width, 1030) - 64
+            let gridWidth = min(viewport.size.width, WorkspaceLayout.pageWidth) - 2 * WorkspaceLayout.pageInset
             let columnLimit = max(1, Int((gridWidth + 12) / 206))
             ScrollView {
                 VStack(alignment: .leading, spacing: 30) {
                     HStack(alignment: .center, spacing: 16) {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Class library")
-                                .font(.system(size: 36, weight: .semibold)).tracking(-1.2)
-                                .accessibilityAddTraits(.isHeader)
+                            Text("Class Library").workspacePageTitle()
                             if !classes.isEmpty {
                                 Text("\(classes.count) \(classes.count == 1 ? "class" : "classes") · \(materials.count) \(materials.count == 1 ? "material" : "materials")")
                                     .font(.callout).foregroundStyle(WorkspacePalette.muted)
@@ -379,13 +386,11 @@ struct WelcomeView: View {
                     .buttonStyle(.link)
                 }
                 .foregroundStyle(WorkspacePalette.ink)
-                .padding(32)
-                .frame(maxWidth: 1030, alignment: .leading)
-                .frame(maxWidth: .infinity)
+                .workspacePage()
             }
         }
         .background(WorkspacePalette.canvas)
-        .navigationTitle("Class library")
+        .navigationTitle("Class Library")
     }
 
     private var emptyLibrary: some View {
@@ -503,23 +508,23 @@ private struct ClassMenuItems: View {
     var body: some View {
         if includeOpen {
             Button("Open Class", systemImage: "book") { model.selection = .classDetail(enrollment.id) }
-            Divider()
         }
-        Button("Edit Class…", systemImage: "pencil") { model.presentedEditor = .editClass(enrollment.id) }
-        Button("New Note…", systemImage: "square.and.pencil") {
-            model.selection = .classDetail(enrollment.id)
-            model.presentedEditor = .newActivity
-        }
-        Button("Plan with Agent…", systemImage: "sparkles") {
+        Button("Open Class Planner", systemImage: "sparkles") {
             model.openPlanner(for: enrollment.id)
         }
-        Button("Open Class Chat…", systemImage: "bubble.left.and.bubble.right") {
+        Button("Open Class Chat", systemImage: "bubble.left.and.bubble.right") {
             model.openClassChat(for: enrollment.id)
+        }
+        Divider()
+        Button("New Study Note…", systemImage: "square.and.pencil") {
+            model.selection = .classDetail(enrollment.id)
+            model.presentedEditor = .newActivity
         }
         Button("Import Material…", systemImage: "square.and.arrow.down") { model.importMaterials(for: enrollment.id) }
         ClassDriveFolderActions(model: model, course: enrollment)
         Button("Export Class Context…", systemImage: "square.and.arrow.up") { model.exportContextBundle(for: enrollment.id) }
         Divider()
+        Button("Edit Class…", systemImage: "pencil") { model.presentedEditor = .editClass(enrollment.id) }
         Button(enrollment.archived ? "Unarchive Class" : "Archive Class", systemImage: "archivebox") {
             let archive = !enrollment.archived
             model.mutate { state in
@@ -566,7 +571,7 @@ struct ClassContextView: View {
                 case .lectures:
                     LectureLibraryView(model: model, classID: enrollment.id, selectedRecordingID: $selectedRecording, showUnassigned: $showUnassigned)
                 case .capture:
-                    ClassCaptureView(model: model, enrollment: enrollment)
+                    ScrollView { ClassCaptureView(model: model, enrollment: enrollment) }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -623,13 +628,18 @@ struct ClassContextView: View {
                 Menu {
                     ClassMenuItems(model: model, enrollment: enrollment, includeOpen: false)
                 } label: {
-                    Text("Class actions").font(.callout.weight(.medium))
+                    HStack(spacing: 6) {
+                        Text("Class actions")
+                        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                    }
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10).frame(height: 26)
+                    .background(.black.opacity(0.22), in: Capsule())
+                    .overlay { Capsule().strokeBorder(.white.opacity(0.4)).allowsHitTesting(false) }
+                    .contentShape(Capsule())
                 }
-                .menuStyle(.borderlessButton).fixedSize()
-                .tint(Color(red: 0.09, green: 0.17, blue: 0.16))
-                .environment(\.colorScheme, .light)
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(Color(white: 0.94), in: Capsule())
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 .accessibilityLabel("Class actions").help("Class actions")
             }
             if selectedTab != .chat {

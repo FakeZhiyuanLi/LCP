@@ -159,11 +159,12 @@ private struct LectureDetailView: View {
                                 if let speaker = cue.speaker { Text(speaker).font(.caption2).foregroundStyle(.secondary) }
                             }.frame(width: 70, alignment: .leading)
                             Text(cue.text).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-                            Menu {
+                            MoreActionsMenu(title: "Citation actions for \(recording.filename) at \(formatDuration(cue.start))") {
                                 Button("Open Exact Citation") { model.presentedCitation = citation(revision, cueIndex: index) }
                                 Button("Copy Citation Link") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(CitationLink.url(for: citation(revision, cueIndex: index)).absoluteString, forType: .string) }
                                 Button("Bookmark Cue") { bookmark(revision, cueIndex: index) }
-                            } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).frame(width: 24).disabled(recording.classID == nil).accessibilityLabel("Citation actions for \(recording.filename) at \(formatDuration(cue.start))")
+                            }
+                            .disabled(recording.classID == nil)
                         }.padding(12).background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
                     }
                     ForEach(Array(revision.audioEvents.enumerated()), id: \.offset) { _, event in

@@ -12,9 +12,7 @@ struct ConnectionsOverview: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("Connections")
-                    .font(.system(size: 36, weight: .semibold)).tracking(-1.2)
-                    .accessibilityAddTraits(.isHeader)
+                Text("Connections").workspacePageTitle()
 
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
@@ -29,8 +27,7 @@ struct ConnectionsOverview: View {
                             accountRow(service)
                         }
                     }
-                    .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(WorkspacePalette.line).allowsHitTesting(false) }
+                    .workspacePanel()
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -55,9 +52,7 @@ struct ConnectionsOverview: View {
                     }
                 }
             }
-            .padding(28)
-            .frame(maxWidth: 920, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .workspacePage()
         }
         .navigationTitle("Connections")
         .onAppear(perform: refresh)

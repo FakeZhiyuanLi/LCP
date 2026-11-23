@@ -153,7 +153,11 @@ struct ClassChatView: View {
             }
         }
         .padding(20)
-        .frame(maxWidth: 920, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .workspacePanel()
+        .padding(.horizontal, globalScope ? WorkspaceLayout.pageInset : 0)
+        .padding(.vertical, 12)
+        .frame(maxWidth: WorkspaceLayout.pageWidth, alignment: .topLeading)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -413,18 +417,14 @@ struct ClassChatView: View {
             Menu {
                 if profiles.isEmpty {
                     Button("Add BYOK Provider…", systemImage: "key") { model.presentedEditor = .newBYOKProvider }
-                }
-                ForEach(profiles) { profile in
-                    Button {
-                        session.selectedProfileID = profile.id
-                    } label: {
-                        HStack {
-                            Text(profile.name)
-                            Spacer()
-                            Text(profile.model)
-                                .foregroundStyle(WorkspacePalette.muted)
+                } else {
+                    Picker("Agent provider", selection: $session.selectedProfileID) {
+                        ForEach(profiles) { profile in
+                            Text("\(profile.name) · \(profile.model)").tag(Optional(profile.id))
                         }
                     }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
                 }
             } label: {
                 Label(selectedProfile.map { "\($0.name) · \($0.model)" } ?? "Choose an agent",

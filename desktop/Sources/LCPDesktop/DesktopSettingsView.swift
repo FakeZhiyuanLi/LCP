@@ -89,7 +89,11 @@ struct DesktopSettingsView: View {
                     Text("The existing synced catalog and finalized v1 audio markers remain the capture contract. The desktop checks the installed recorder and uses a shared process lease before recording. Capture setup is explicit in a class's Capture tab.").font(.caption).foregroundStyle(.secondary)
                 }
             }.formStyle(.grouped).tabItem { Label("Lectures", systemImage: "waveform") }.tag("lectures")
-        }.disabled(model.libraryTransfer == .restore)
-            .frame(width: 700, height: 600)
+        }
+        .tint(WorkspacePalette.accent)
+        .scrollContentBackground(.hidden)
+        .background(WorkspacePalette.canvas)
+        .disabled(model.libraryTransfer == .restore)
+        .frame(width: 700, height: 600)
     }
 }

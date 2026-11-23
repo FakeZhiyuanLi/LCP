@@ -14,41 +14,43 @@ struct CaptureWorkspaceView: View {
             ? model.state.classes.first { $0.id == activeClassID }
             : classes.first { $0.id == model.captureClassID } ?? (classes.count == 1 ? classes.first : nil)
 
-        VStack(alignment: .leading, spacing: 0) {
-            if model.captureInProgress {
-                if let selected {
-                    LabeledContent("Class", value: selected.displayLabel).padding(24)
-                }
-            } else if !classes.isEmpty {
-                Picker("Class", selection: Binding(get: { selected?.id }, set: { model.captureClassID = $0 })) {
-                    if classes.count > 1 { Text("Choose a class").tag(nil as UUID?) }
-                    ForEach(groups) { group in
-                        Section(group.title) {
-                            ForEach(group.classes) { course in
-                                Text([course.displayLabel, course.section].filter { !$0.isEmpty }.joined(separator: " · "))
-                                    .tag(Optional(course.id))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Capture").workspacePageTitle()
+                if model.captureInProgress {
+                    if let selected {
+                        LabeledContent("Class", value: selected.displayLabel)
+                    }
+                } else if !classes.isEmpty {
+                    Picker("Class", selection: Binding(get: { selected?.id }, set: { model.captureClassID = $0 })) {
+                        if classes.count > 1 { Text("Choose a class").tag(nil as UUID?) }
+                        ForEach(groups) { group in
+                            Section(group.title) {
+                                ForEach(group.classes) { course in
+                                    Text([course.displayLabel, course.section].filter { !$0.isEmpty }.joined(separator: " · "))
+                                        .tag(Optional(course.id))
+                                }
                             }
                         }
                     }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 420, alignment: .leading)
                 }
-                .pickerStyle(.menu)
-                .padding(24)
-            }
-            if let selected {
-                ClassCaptureView(model: model, enrollment: selected).id(selected.id)
-            } else if model.captureInProgress, let capture = model.capture {
-                CaptureMenuItems(capture: capture).padding(.horizontal, 24)
-            } else if classes.isEmpty {
-                ContentUnavailableView {
-                    Label("No classes to record", systemImage: "mic")
-                } description: {
-                    Text("Add a class to record a lecture.")
-                } actions: {
-                    Button("New Class…") { model.presentedEditor = .newClass }
+                if let selected {
+                    ClassCaptureView(model: model, enrollment: selected).id(selected.id)
+                } else if model.captureInProgress, let capture = model.capture {
+                    CaptureMenuItems(capture: capture)
+                } else if classes.isEmpty {
+                    ContentUnavailableView {
+                        Label("No classes to record", systemImage: "mic")
+                    } description: {
+                        Text("Add a class to record a lecture.")
+                    } actions: {
+                        Button("New Class…") { model.presentedEditor = .newClass }
+                    }
                 }
-            } else {
-                ContentUnavailableView("Choose a class to record", systemImage: "mic")
             }
+            .workspacePage()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle("Capture")
@@ -59,18 +61,16 @@ struct ClassCaptureView: View {
     @ObservedObject var model: WorkspaceModel
     let enrollment: ClassEnrollment
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Record a lecture").font(.title2.bold())
-                if let capture = model.capture {
-                    CaptureControls(model: model, capture: capture, enrollment: enrollment)
-                } else {
-                    Button("Initialize Local Capture") { model.initializeCapture() }
-                        .buttonStyle(.borderedProminent)
-                }
-            }.padding(24)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Record a lecture").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
+            if let capture = model.capture {
+                CaptureControls(model: model, capture: capture, enrollment: enrollment)
+            } else {
+                Button("Initialize Local Capture") { model.initializeCapture() }
+                    .buttonStyle(.borderedProminent)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { model.initializeCapture() }
     }
 }
@@ -114,7 +114,7 @@ private struct CaptureControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Label(localCatalogBlock && capture.state == .blocked ? "Idle" : capture.state.rawValue.capitalized,
+                Label(localCatalogBlock && capture.state == .blocked ? "Idle" : capture.state.displayName,
                       systemImage: capture.state == .recording ? "record.circle.fill" : "mic")
                     .font(.headline).foregroundStyle(capture.state == .recording ? Color.red : Color.primary)
                 Spacer()
@@ -168,7 +168,7 @@ private struct CaptureControls: View {
                     .accessibilityLabel("Start recording for \(enrollment.shortLabel)")
             }
         }
-        .padding(16).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 12))
+        .padding(16).workspacePanel()
         .onChange(of: enrollment.recordingDestination) { _, saved in destinationID = saved?.exactCourseCode }
     }
 
@@ -209,23 +209,23 @@ struct DesktopMenuBarView: View {
     @ObservedObject var model: WorkspaceModel
     @Environment(\.openWindow) private var openWindow
     var body: some View {
-        Button("Open LCP") { if let delegate = DesktopAppDelegate.active { delegate.showWorkspace() } else { openWindow(id: "workspace"); NSApp.activate(ignoringOtherApps: true) } }
+        Button("Open LCP", systemImage: "macwindow") { if let delegate = DesktopAppDelegate.active { delegate.showWorkspace() } else { openWindow(id: "workspace"); NSApp.activate(ignoringOtherApps: true) } }
+        Divider()
         if let enrollment = model.selectedClass {
-            Button("Log in \(enrollment.shortLabel)…") { showLog(for: enrollment.id) }
+            Button("New Study Note for \(enrollment.shortLabel)…", systemImage: "square.and.pencil") { showLog(for: enrollment.id) }
         } else {
-            Menu("Log Class Context…") {
+            Menu("New Study Note", systemImage: "square.and.pencil") {
                 ForEach(model.visibleClasses) { enrollment in
                     Button(enrollment.displayLabel) { showLog(for: enrollment.id) }
                 }
             }.disabled(model.visibleClasses.isEmpty)
         }
-        Divider()
-        Button("Open Capture") { model.openCapture() }
+        Button("Open Capture", systemImage: "mic") { model.openCapture() }
         if let capture = model.capture { CaptureMenuItems(capture: capture) }
-        else { Text("Capture has not been initialized.") }
-        if let name = model.selectedClass?.shortLabel { Text("Selected class: \(name)") }
         Divider()
-        Button("Back Up Library…") { model.exportBackup() }
+        SettingsLink { Label("Settings…", systemImage: "gearshape") }
+        Button("Back Up Library…", systemImage: "externaldrive") { model.exportBackup() }
+        Divider()
         Button("Quit LCP") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
     private func showLog(for classID: UUID) {
@@ -238,10 +238,24 @@ struct DesktopMenuBarView: View {
 private struct CaptureMenuItems: View {
     @ObservedObject var capture: CaptureCoordinator
     var body: some View {
-        Text("Capture: \(capture.state.rawValue)")
-        if capture.state == .recording { Text(formatDuration(capture.duration)); Button("Stop and Finalize Recording") { capture.stop() } }
-        if capture.state == .finalizing { Text("Finalizing recording…") }
+        if capture.state == .recording {
+            Text("Recording · \(formatDuration(capture.duration))")
+            Button("Stop and Finalize Recording", systemImage: "stop.fill") { capture.stop() }
+        } else {
+            Text(capture.state.displayName)
+        }
         if let message = capture.statusMessage { Text(message) }
+    }
+}
+private extension CaptureState {
+    var displayName: String {
+        switch self {
+        case .idle: "Idle"
+        case .requestingPermission: "Waiting for microphone access"
+        case .recording: "Recording"
+        case .finalizing: "Saving recording…"
+        case .blocked: "Capture needs attention"
+        }
     }
 }
 func formatDuration(_ time: TimeInterval) -> String {

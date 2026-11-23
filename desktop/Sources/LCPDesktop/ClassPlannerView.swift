@@ -51,20 +51,11 @@ struct ClassPlannerView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                header
-                if profiles.isEmpty {
-                    noProvider
-                } else {
-                    if globalScope { scopeCard }
-                    requestCard
-                    contextCard
-                    if let plan { resultCard(plan) }
-                }
+            if globalScope {
+                plannerContent.workspacePage()
+            } else {
+                plannerContent
             }
-            .padding(.top, 12)
-            .frame(maxWidth: 920, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onAppear {
             if globalScope && selectedClassIDs.isEmpty {
@@ -88,11 +79,29 @@ struct ClassPlannerView: View {
         .onDisappear { profileTask?.cancel() }
     }
 
+    private var plannerContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            header
+            if profiles.isEmpty {
+                noProvider
+            } else {
+                if globalScope { scopeCard }
+                requestCard
+                contextCard
+                if let plan { resultCard(plan) }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline) {
-                Label(globalScope ? "Study planner" : "Class planner", systemImage: "sparkles")
-                    .font(.title2.weight(.semibold))
+                if globalScope {
+                    Text("Study Planner").workspacePageTitle()
+                } else {
+                    Text("Class planner").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
+                }
                 Spacer()
                 if generating { ProgressView().controlSize(.small) }
             }
@@ -126,8 +135,7 @@ struct ClassPlannerView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WorkspacePalette.line) }
+        .workspacePanel()
     }
 
     private var scopeCard: some View {
@@ -172,8 +180,7 @@ struct ClassPlannerView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WorkspacePalette.line) }
+        .workspacePanel()
     }
 
     private var requestCard: some View {
@@ -212,8 +219,7 @@ struct ClassPlannerView: View {
             if let status { Text(status).font(.caption).foregroundStyle(.orange) }
         }
         .padding(18)
-        .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WorkspacePalette.line) }
+        .workspacePanel()
     }
 
     private var contextCard: some View {

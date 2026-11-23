@@ -74,7 +74,7 @@ struct UniversityConnectionManager: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(service.rawValue).font(.title2.bold())
+                    Text(service.rawValue).font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
                     Text(status.label).font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -165,6 +165,8 @@ struct UniversityConnectionManager: View {
         }
         .frame(width: 460, alignment: .leading)
         .padding(24)
+        .background(WorkspacePalette.canvas)
+        .tint(WorkspacePalette.accent)
         .fixedSize(horizontal: false, vertical: true)
         .onAppear { refresh() }
         .onDisappear { cancel(); refreshTask?.cancel(); token = "" }

@@ -24,16 +24,14 @@ struct ChatFileRow: View {
                 Text(ByteCountFormatter.string(fromByteCount: Int64(file.original.byteCount), countStyle: .file))
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer(minLength: 4)
-                Menu {
+                MoreActionsMenu(title: "Actions for \(file.filename)") {
                     if file.savedMaterialID == nil {
                         ForEach(destinations) { enrollment in
                             Button("Save to \(enrollment.displayLabel)") { save(to: enrollment.id) }
                         }
                     }
                     Button("Save a Copy…", action: exportCopy)
-                } label: { Image(systemName: "ellipsis.circle") }
-                .menuStyle(.borderlessButton).fixedSize()
-                .accessibilityLabel("Actions for \(file.filename)")
+                }
             }
             if let saved = file.savedMaterialID, let material = model.state.materials.first(where: { $0.id == saved }) {
                 Label("Saved to \(model.state.classes.first { $0.id == material.classID }?.shortLabel ?? "class materials")",

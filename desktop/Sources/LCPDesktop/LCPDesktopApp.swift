@@ -36,17 +36,28 @@ struct LCPDesktopApp: App {
         .defaultSize(width: 1260, height: 820)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("New Class…") { workspace.inWorkspace("New Class") { workspace.presentedEditor = .newClass } }
+                Button("New Class…", systemImage: "plus") { workspace.inWorkspace("New Class") { workspace.presentedEditor = .newClass } }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
-                Button("New Study Note…") { workspace.inWorkspace("New Study Note") { workspace.presentedEditor = .newActivity } }
+                Button("New Study Note…", systemImage: "square.and.pencil") { workspace.inWorkspace("New Study Note") { workspace.presentedEditor = .newActivity } }
                     .keyboardShortcut("j", modifiers: .command)
                     .disabled(workspace.selectedClassID == nil)
-                Button("Import Material…") { workspace.importMaterials() }
+                Button("Import Material…", systemImage: "square.and.arrow.down") { workspace.importMaterials() }
                     .keyboardShortcut("i", modifiers: .command)
                     .disabled(workspace.selectedClassID == nil)
-                Button("Study Planner…", systemImage: "sparkles") { workspace.openPlanner() }
-                Button("University Chat…", systemImage: "bubble.left.and.bubble.right.fill") { workspace.openUniversityChat() }
-                Button("Open Capture") { workspace.openCapture() }
+            }
+            CommandGroup(after: .sidebar) {
+                Divider()
+                Button("Class Library", systemImage: "square.grid.2x2") { workspace.inWorkspace("Class Library") { workspace.selection = .welcome } }
+                Button("Capture", systemImage: "mic") { workspace.openCapture() }
+                Button("Connections", systemImage: "link") { workspace.inWorkspace("Connections") { workspace.selection = .universityConnections } }
+                Divider()
+                Button("Study Planner", systemImage: "sparkles") { workspace.inWorkspace("Study Planner") { workspace.selection = .planner } }
+                if let course = workspace.selectedClass {
+                    Button("Class Planner", systemImage: "sparkles") { workspace.openPlanner(for: course.id) }
+                }
+                Button("University Chat", systemImage: "bubble.left.and.bubble.right") { workspace.openUniversityChat() }
+                Button("Agent Connections", systemImage: "point.3.connected.trianglepath.dotted") { workspace.inWorkspace("Agent Connections") { workspace.selection = .connections } }
+                Button("Review Proposals", systemImage: "checkmark.bubble") { workspace.inWorkspace("Review Proposals") { workspace.selection = .review } }
             }
             CommandGroup(after: .saveItem) {
                 Button("Back Up Library…") { workspace.exportBackup() }
@@ -54,7 +65,7 @@ struct LCPDesktopApp: App {
                     .disabled(workspace.selectedClassID == nil)
             }
         }
-        Settings { DesktopSettingsView(model: workspace) }
+        Settings { DesktopSettingsView(model: workspace).preferredColorScheme(workspace.previewColorScheme) }
         MenuBarExtra {
             DesktopMenuBarView(model: workspace)
         } label: {

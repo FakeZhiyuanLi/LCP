@@ -92,8 +92,7 @@ struct MaterialLibraryView: View {
                         }
                     }
                     .padding(.vertical, 2)
-                    .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 14))
-                    .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WorkspacePalette.line).allowsHitTesting(false) }
+                    .workspacePanel()
                 }
             }
         }
@@ -174,7 +173,7 @@ struct MaterialLibraryView: View {
                     Button("Read") { model.presentedCitation = citation(material, current) }
                         .accessibilityLabel("Read \(material.title), revision \(current.sequence)")
                 }
-                Menu {
+                MoreActionsMenu(title: "Actions for material \(material.title)") {
                     if let current {
                         if isWebLink {
                             OpenWebsiteButton(model: model, revision: current, title: material.title)
@@ -200,12 +199,7 @@ struct MaterialLibraryView: View {
                     Button(expandedMaterial == material.id ? "Hide Revision History" : "Show Revision History") {
                         expandedMaterial = expandedMaterial == material.id ? nil : material.id
                     }
-                } label: { Image(systemName: "ellipsis") }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .frame(width: 28)
-                .accessibilityLabel("Actions for material \(material.title)")
-                .help("Material actions")
+                }
             }
             if expandedMaterial == material.id {
                 Divider()
@@ -374,13 +368,13 @@ struct ActivityHistoryView: View {
     var entries: [ActivityEntry] { model.state.activities.filter { $0.classID == classID }.sorted { $0.eventAt == $1.eventAt ? $0.id.uuidString < $1.id.uuidString : $0.eventAt > $1.eventAt } }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("Class and study history").foregroundStyle(.secondary); Spacer(); Button("Log an Entry…") { model.presentedEditor = .newActivity } }.padding(.top, 12)
+            HStack { Text(entries.count == 1 ? "1 entry" : "\(entries.count) entries").font(.callout).foregroundStyle(WorkspacePalette.muted); Spacer(); Button("Log an Entry…") { model.presentedEditor = .newActivity } }
             if entries.isEmpty { ContentUnavailableView("Build Your Class History", systemImage: "square.and.pencil", description: Text("Log a lecture topic, study session, open question, or selected agent answer. Sources and authorship stay visible.")) }
             else {
                 List(entries) { entry in
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Label(entry.kind.replacingOccurrences(of: "_", with: " ").capitalized, systemImage: entry.agentIdentity == nil ? "person.crop.circle" : "sparkles").font(.caption).foregroundStyle(entry.agentIdentity == nil ? Color.secondary : Color.purple)
+                            Label(entry.kind.replacingOccurrences(of: "_", with: " ").capitalized, systemImage: entry.agentIdentity == nil ? "person.crop.circle" : "sparkles").font(.caption).foregroundStyle(entry.agentIdentity == nil ? WorkspacePalette.muted : WorkspacePalette.accent)
                             if let agent = entry.agentIdentity { Text(agent).font(.caption).foregroundStyle(.secondary) }
                             Spacer()
                             Text(entry.eventAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
@@ -420,8 +414,8 @@ struct ActivityHistoryView: View {
                                 }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
                             }
                         }
-                    }.padding(.vertical, 10)
-                }.listStyle(.inset)
+                    }.workspaceListRow()
+                }.listStyle(.plain).scrollContentBackground(.hidden)
             }
         }.sheet(item: $editing) { ActivityEditor(model: model, existing: $0) }
     }
@@ -437,13 +431,13 @@ struct CourseworkListView: View {
         let pendingReviews = model.canvasSyncPendingReviews.filter { $0.proposed.classID == classID }
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Assignments, readings, and exams as class context").foregroundStyle(.secondary)
+                Text(entries.count == 1 ? "1 coursework item" : "\(entries.count) coursework items").font(.callout).foregroundStyle(WorkspacePalette.muted)
                 Spacer()
                 Button("Refresh Canvas", systemImage: "arrow.clockwise") { model.syncCanvasNow() }
                     .disabled(model.canvasSyncInProgress)
                 Button("University Services…") { model.presentedEditor = .universityServices(classID: classID) }
                 Button("Add Coursework…") { model.presentedEditor = .newCoursework }
-            }.padding(.top, 12)
+            }
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: model.canvasSyncInProgress ? "arrow.triangle.2.circlepath" : "graduationcap")
@@ -493,8 +487,8 @@ struct CourseworkListView: View {
                             if let text = entry.submissionURL, let url = URL(string: text), ["https", "http"].contains(url.scheme?.lowercased() ?? "") { Link("Submission Link", destination: url).font(.caption).accessibilityLabel("Submission link for \(entry.title)") }
                         }
                         Spacer(); Button("Edit") { editing = entry }.accessibilityLabel("Edit coursework \(entry.title)")
-                    }.padding(.vertical, 10)
-                }.listStyle(.inset)
+                    }.workspaceListRow()
+                }.listStyle(.plain).scrollContentBackground(.hidden)
             }
         }.sheet(item: $editing) { CourseworkEditor(model: model, existing: $0) }
             .sheet(item: $sourceReview) { CourseworkReviewView(model: model, review: $0) }
@@ -519,7 +513,7 @@ struct ClassSearchView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search this class's materials, notes, and lectures", text: $model.searchText).textFieldStyle(.roundedBorder).onSubmit { model.runSearch() }
                 Button("Search") { model.runSearch() }.keyboardShortcut(.return, modifiers: [])
-            }.padding(.top, 14)
+            }
             DisclosureGroup(isExpanded: $showScope) {
                 SourceScopeControls(state: model.state, materials: materials, materialsOnly: $model.searchMaterialsOnly, selectedMaterialIDs: $model.searchSelectedMaterialIDs,
                     timeLimited: $model.searchTimeLimited, eventFrom: $model.searchEventFrom, eventUntil: $model.searchEventUntil)
@@ -550,9 +544,9 @@ struct ClassSearchView: View {
                             Text(result.excerpt).lineLimit(6).foregroundStyle(.primary).textSelection(.enabled)
                             Text(result.provenance).font(.caption).foregroundStyle(.secondary)
                             Label("Open Exact Source", systemImage: "arrow.up.right.square").font(.caption).foregroundStyle(.tint)
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
-                    }.buttonStyle(.plain)
-                }.listStyle(.inset)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.buttonStyle(.plain).workspaceListRow()
+                }.listStyle(.plain).scrollContentBackground(.hidden)
             }
         }.onChange(of: classID) { _, _ in invalidateResults(); showScope = false }
             .onChange(of: model.searchMaterialsOnly) { _, _ in invalidateResults() }

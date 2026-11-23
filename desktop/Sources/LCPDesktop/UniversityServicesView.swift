@@ -44,7 +44,7 @@ struct UniversityServicesView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("University Services").font(.title2.bold())
+                    Text("University Services").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
                     Text(destination).foregroundStyle(.secondary).lineLimit(2).help(destination)
                 }
                 Spacer()
@@ -73,8 +73,10 @@ struct UniversityServicesView: View {
             .frame(height: min(contentHeight, 390))
             .padding(.horizontal, -4)
         }
-        .padding(22)
+        .padding(24)
         .frame(minWidth: 570, idealWidth: 640, maxWidth: 720, alignment: .topLeading)
+        .background(WorkspacePalette.canvas)
+        .tint(WorkspacePalette.accent)
         .onChange(of: model.selectedClassID) { _, newClass in
             if newClass != classID { dismiss() }
         }

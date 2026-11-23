@@ -115,7 +115,7 @@ without requiring a personal key.
 
 ### Class planner
 
-Open a class and choose **Plan** or use **Class actions → Plan with Agent…**. Enter
+Open a class and choose **Plan** or use **Class actions → Open Class Planner**. Enter
 what you want to accomplish and choose an enabled provider. LCP builds a fresh,
 bounded snapshot from that class's current materials, reviewed coursework,
 class-history entries, and available accepted lecture transcripts. Raw audio,
@@ -127,7 +127,7 @@ History** creates an attributed, citation-backed `agent_plan` entry. Generating
 or saving a plan does not edit Canvas, Drive, Gmail, Gradescope, deadlines,
 grades, or recordings.
 
-Use **Study Planner** in the sidebar or **Study Planner…** from the main menu for
+Use **Study Planner** in the sidebar or **View → Study Planner** for
 a cross-class plan. LCP selects all active classes by default, and you can clear
 the selection or choose a smaller set before reviewing the context snapshot.
 Saving a cross-class answer creates one class-scoped history entry per selected
