@@ -22,6 +22,7 @@ final class ChatWindowLayoutTests: XCTestCase {
         let enrollment = try XCTUnwrap(model.activeClasses.first)
         model.notice = nil
         let repository = try XCTUnwrap(model.repository)
+        model.selectedClassSection = .chat
         let reply = (1...80).map { "Study point \($0) for the fictional seminar." }.joined(separator: "\n\n")
         for classID: UUID? in [enrollment.id, nil] {
             let ids = [enrollment.id]
@@ -34,7 +35,6 @@ final class ChatWindowLayoutTests: XCTestCase {
             ])
             try repository.update { $0.chatThreads = ($0.chatThreads ?? []) + [thread] }
             model.refresh()
-            model.chatClassID = classID
             model.selection = classID.map(WorkspaceRoute.classDetail) ?? .universityChat
             let workspace = WorkspaceView(model: model).frame(minWidth: 980, minHeight: 660)
             let window = NSWindow(contentViewController: NSHostingController(rootView: workspace))

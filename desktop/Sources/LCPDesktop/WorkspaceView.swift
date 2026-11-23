@@ -420,6 +420,7 @@ struct WelcomeView: View {
     private func recentMaterial(_ material: SourceMaterial, in enrollment: ClassEnrollment) -> some View {
         Button {
             guard let revision = model.state.materialRevisions.first(where: { $0.id == material.currentRevisionID && $0.materialID == material.id }) else {
+                model.selectedClassSection = .materials
                 model.selection = .classDetail(enrollment.id)
                 return
             }
@@ -543,7 +544,6 @@ private struct ClassMenuItems: View {
 struct ClassContextView: View {
     @ObservedObject var model: WorkspaceModel
     let enrollment: ClassEnrollment
-    @State private var selectedTab = CourseSection.materials
     @State private var materialFilter = ""
     @State private var expandedMaterial: UUID?
     @State private var selectedRecording: UUID?
@@ -552,10 +552,10 @@ struct ClassContextView: View {
         VStack(spacing: 0) {
             courseCover
                 .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 12)
-            CourseSectionPicker(selection: $selectedTab)
+            CourseSectionPicker(selection: $model.selectedClassSection)
                 .padding(.horizontal, 20).padding(.bottom, 14)
             Group {
-                switch selectedTab {
+                switch model.selectedClassSection {
                 case .planner:
                     ClassPlannerView(model: model, classID: enrollment.id).id(model.rootURL)
                 case .chat:
@@ -578,28 +578,6 @@ struct ClassContextView: View {
             .padding(.horizontal, 20).padding(.bottom, 16)
         }
         .navigationTitle(enrollment.shortLabel)
-        .onAppear {
-            activatePlannerIfRequested()
-            activateChatIfRequested()
-        }
-        .onChange(of: model.plannerClassID) { _, _ in
-            activatePlannerIfRequested()
-        }
-        .onChange(of: model.chatClassID) { _, _ in
-            activateChatIfRequested()
-        }
-    }
-
-    private func activatePlannerIfRequested() {
-        guard model.plannerClassID == enrollment.id else { return }
-        selectedTab = .planner
-        model.plannerClassID = nil
-    }
-
-    private func activateChatIfRequested() {
-        guard model.chatClassID == enrollment.id else { return }
-        selectedTab = .chat
-        model.chatClassID = nil
     }
 
     private var courseCover: some View {
@@ -612,7 +590,7 @@ struct ClassContextView: View {
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 5))
                 }
-                if selectedTab == .chat {
+                if model.selectedClassSection == .chat {
                     Text(enrollment.title)
                         .font(.title3.weight(.semibold))
                         .lineLimit(1)
@@ -636,7 +614,7 @@ struct ClassContextView: View {
                 .background(WorkspacePalette.surface, in: Capsule())
                 .overlay { Capsule().strokeBorder(WorkspacePalette.line).allowsHitTesting(false) }
             }
-            if selectedTab != .chat {
+            if model.selectedClassSection != .chat {
                 Text(enrollment.title)
                     .font(.system(size: 30, weight: .semibold)).tracking(-0.7)
                     .accessibilityAddTraits(.isHeader)
@@ -659,8 +637,8 @@ struct ClassContextView: View {
             }
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, selectedTab == .chat ? 16 : 22)
-        .padding(.vertical, selectedTab == .chat ? 8 : 16)
+        .padding(.horizontal, model.selectedClassSection == .chat ? 16 : 22)
+        .padding(.vertical, model.selectedClassSection == .chat ? 8 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             WorkspacePalette.cover(for: enrollment.shortLabel)

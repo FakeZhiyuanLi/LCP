@@ -19,6 +19,7 @@ struct UnsavedChatReply {
 @MainActor
 final class WorkspaceModel: ObservableObject {
     @Published var state = ContextState()
+    @Published var selectedClassSection: CourseSection = .materials
     @Published var selection: WorkspaceRoute? = .welcome {
         didSet {
             if selection != oldValue {
@@ -635,19 +636,14 @@ final class WorkspaceModel: ObservableObject {
         inWorkspace(target == nil ? "Open Study Planner" : "Open Class Planner") { [self] in
             if let target {
                 guard state.classes.contains(where: { $0.id == target }) else { return }
+                selectedClassSection = .planner
                 selection = .classDetail(target)
-                // The class page owns the planner tab, so selecting it remains a
-                // normal workspace navigation action and does not create a second
-                // window or an unscoped context request.
-                plannerClassID = target
             } else {
                 selection = .planner
             }
         }
     }
 
-    @Published var plannerClassID: UUID?
-    @Published var chatClassID: UUID?
     @Published private(set) var unsavedChatReplies: [UUID?: UnsavedChatReply] = [:]
     let agentProviders: AgentProviders
     private var chatSessions: [UUID?: ChatSession] = [:]
@@ -678,8 +674,8 @@ final class WorkspaceModel: ObservableObject {
     func openClassChat(for classID: UUID) {
         guard state.classes.contains(where: { $0.id == classID }) else { return }
         inWorkspace("Open Class Chat") { [self] in
+            selectedClassSection = .chat
             selection = .classDetail(classID)
-            chatClassID = classID
         }
     }
 
@@ -837,7 +833,6 @@ final class WorkspaceModel: ObservableObject {
             let labels = entries.map(\.label)
             let destination = labels.count == 1 ? "\(labels[0])'s history" : "\(labels.count) class histories"
             notice = "Saved the reviewed plan to \(destination)."
-            plannerClassID = nil
         }
     }
     @discardableResult

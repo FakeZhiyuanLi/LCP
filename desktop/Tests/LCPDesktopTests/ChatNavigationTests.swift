@@ -50,7 +50,7 @@ final class ChatNavigationTests: XCTestCase {
         try await waitFor("university composer") { self.editor(in: content) != nil }
         try XCTUnwrap(editor(in: content)).insertText(question, replacementRange: NSRange(location: 0, length: 0))
         try await waitFor("typed draft") { university.draft == question }
-        model.chatClassID = course.id
+        model.selectedClassSection = .chat
         model.selection = .classDetail(course.id)
         try await waitFor("empty class composer") { self.editor(in: content)?.string == "" }
         try XCTUnwrap(editor(in: content)).insertText(classDraft, replacementRange: NSRange(location: 0, length: 0))
@@ -64,7 +64,6 @@ final class ChatNavigationTests: XCTestCase {
         XCTAssertTrue(window.performKeyEquivalent(with: sendKey))
         try await waitFor("first streamed words") { university.generation?.update?.text == "Start with stars" }
 
-        model.chatClassID = course.id
         model.selection = .classDetail(course.id)
         try await waitFor("class draft while university reply is pending") { self.editor(in: content)?.string == classDraft }
         XCTAssertNil(model.chatSession(for: course.id).generation)

@@ -7,6 +7,35 @@ import LCPContextServices
 
 @MainActor
 final class PlannerNavigationTests: XCTestCase {
+    func testClassSectionFollowsNavigationAndShowsTheDestinationClass() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (model, first, _) = try workspace(at: root)
+        let second = try XCTUnwrap(model.activeClasses.first { $0.id != first.id })
+        let firstObjective = "Review the rules of inference."
+        let secondObjective = "Compare the narrators."
+        model.plannerSession(for: first.id).objective = firstObjective
+        model.plannerSession(for: second.id).objective = secondObjective
+        model.selection = .classDetail(first.id)
+        model.selectedClassSection = .planner
+
+        let window = NSWindow(contentViewController: NSHostingController(rootView: WorkspaceView(model: model)))
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.setContentSize(NSSize(width: 1260, height: 820))
+        window.orderBack(nil)
+        let content = try XCTUnwrap(window.contentView)
+        try await waitFor("first class plan") { self.containsEditor(firstObjective, in: content) }
+
+        model.selection = .classDetail(second.id)
+        try await waitFor("second class plan") { self.containsEditor(secondObjective, in: content) }
+        model.selection = .welcome
+        try await waitFor("left the second class") { !self.containsEditor(secondObjective, in: content) }
+        model.selection = .classDetail(first.id)
+        try await waitFor("returned to first class plan") { self.containsEditor(firstObjective, in: content) }
+    }
+
     func testUniversityAndClassRequestsCompleteWhileTheirTabsAreClosed() async throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -32,14 +61,14 @@ final class PlannerNavigationTests: XCTestCase {
         XCTAssertTrue(university.isGenerating)
 
         individual.objective = "Prepare a truth table."
-        model.plannerClassID = course.id
+        model.selectedClassSection = .planner
         model.selection = .classDetail(course.id)
         try await waitFor("class planner appears with its own draft") {
             individual.selectedProfileID == profile.id && self.containsEditor(individual.objective, in: content)
         }
         individual.generate(in: model, using: profile)
         try await waitFor("the separate class request") { HeldPlannerReply.requests.count == 2 }
-        model.chatClassID = course.id
+        model.selectedClassSection = .chat
         try await waitFor("class Plan tab replaced by Chat") { !self.containsEditor(individual.objective, in: content) }
         HeldPlannerReply.requests[1].finish(action: "Draw the table for class.")
         try await waitFor("class plan completed behind Chat") { individual.plan != nil }
@@ -54,7 +83,7 @@ final class PlannerNavigationTests: XCTestCase {
         university.generate(in: model, using: profile)
         XCTAssertEqual(HeldPlannerReply.requests.count, 2)
 
-        model.plannerClassID = course.id
+        model.selectedClassSection = .planner
         model.selection = .classDetail(course.id)
         try await waitFor("class planner restored") { self.containsEditor(individual.objective, in: content) }
         XCTAssertTrue(individual.plan?.result.response.text.contains("Draw the table for class.") == true)
