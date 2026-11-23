@@ -19,6 +19,7 @@ output_directory=${output_directory:-"$desktop_root/build/$configuration"}
 case "$configuration" in Debug|Release) ;; *) printf '%s\n' 'Configuration must be Debug or Release.' >&2; exit 2 ;; esac
 [ "$(uname -s)" = Darwin ] || { printf '%s\n' 'Run this script on the target Mac.' >&2; exit 1; }
 [ "$(uname -m)" = arm64 ] || { printf '%s\n' 'This release builds for the Apple Silicon Mac (arm64).' >&2; exit 1; }
+signing_identity=$(python3 -IB "$desktop_root/scripts/local_updates.py" build-signer)
 
 output_directory=$(python3 - "$output_directory" <<'PY'
 from pathlib import Path
@@ -72,7 +73,7 @@ built_app="$build_directory/Build/Products/$configuration/LCP Desktop.app"
 [ -d "$built_app" ] || { printf '%s\n' 'Xcode did not produce the expected application bundle.' >&2; exit 1; }
 /usr/bin/ditto "$built_app" "$staging_directory/LCP Desktop.app"
 mkdir -p "$staging_directory/LCP Desktop.app/Contents/Resources"
-python3 - "$desktop_root" "$receipt" "$configuration" <<'PY'
+python3 - "$desktop_root" "$receipt" "$configuration" "$signing_identity" <<'PY'
 from pathlib import Path
 import datetime,hashlib,json,subprocess,sys
 root=Path(sys.argv[1]);record=json.loads(Path(sys.argv[2]).read_text())
@@ -94,7 +95,7 @@ record['configuration']=sys.argv[3]
 record['macos']=subprocess.check_output(['/usr/bin/sw_vers','-productVersion'],text=True).strip()
 record['xcode']=subprocess.check_output(['xcodebuild','-version'],text=True).strip()
 record['swift']=subprocess.check_output(['xcrun','swift','--version'],text=True).strip()
-record['signing']='ad-hoc local development; not notarized'
+record['signing']='ad-hoc local development; not notarized' if sys.argv[4]=='-' else 'Apple Development local build'
 record['validation']='Build receipt only. Test and manual verification are reported separately.'
 Path(sys.argv[2]).write_text(json.dumps(record,indent=2)+'\n')
 PY
@@ -117,8 +118,8 @@ for line in subprocess.check_output(['/usr/bin/otool', '-l', binary], text=True)
         subprocess.run(['/usr/bin/install_name_tool', '-delete_rpath', path, binary], check=True)
 PY
 fi
-/usr/bin/codesign --force --sign - --timestamp=none "$staging_directory/LCP Desktop.app/Contents/Helpers/LCPAgentBridge"
-/usr/bin/codesign --force --sign - --timestamp=none "$staging_directory/LCP Desktop.app"
+/usr/bin/codesign --force --sign "$signing_identity" --timestamp=none --identifier org.lcp.Desktop.AgentBridge "$staging_directory/LCP Desktop.app/Contents/Helpers/LCPAgentBridge"
+/usr/bin/codesign --force --sign "$signing_identity" --timestamp=none "$staging_directory/LCP Desktop.app"
 "$desktop_root/scripts/verify-release.sh" --app "$staging_directory/LCP Desktop.app"
 # Only the caller-selected staging copy is replaced. The installed recorder is
 # never read, replaced, stopped or launched by packaging.

@@ -320,6 +320,21 @@ from the checkout, specifying the installed app’s path.
 python3 desktop/scripts/local_updates.py enable --app '/Applications/LCP Desktop.app'
 ```
 
+To keep Keychain approvals across personal builds, select an **Apple Development**
+signing identity once on the build Mac.
+
+```sh
+python3 desktop/scripts/local_updates.py enable --app '/Applications/LCP Desktop.app' --apple-development
+```
+
+If you have several Apple Development certificates, list them with
+`security find-identity -v -p codesigning` and pass the chosen fingerprint after
+`--apple-development`. The build script remembers the identity for this checkout
+and signs the desktop app and its helper. The local updater checks both signatures.
+When you first switch from an ad-hoc build, macOS may ask about each existing
+Keychain item. Choose **Always Allow** in the macOS dialog to keep that approval
+for subsequent local builds signed with the same identity.
+
 For this workflow, use `desktop/scripts/package-release.sh --dmg` to queue a
 verified local build. Quit LCP Desktop when you're ready, then reopen it after the new build is
 installed. Run `python3 desktop/scripts/local_updates.py status` to check the
@@ -330,7 +345,7 @@ directory also contains the review ZIP, build receipt, release manifest and
 `SHA256SUMS`. Run `shasum -a 256 -c SHA256SUMS` in that directory to verify
 the artifacts. Use a fresh output directory for each run.
 
-The personal build uses ad-hoc signing. For distribution to other Macs through
+Personal builds use ad-hoc signing by default. For distribution to other Macs through
 Gatekeeper, use a **Developer ID Application** signing identity with its private
 key in the build Mac's Keychain and configure a Keychain profile with
 `xcrun notarytool store-credentials`. The following opt-in command submits the

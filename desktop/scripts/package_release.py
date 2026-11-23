@@ -153,6 +153,12 @@ def package(options):
         else:
             run("/usr/bin/ditto", source, app)
         verify_app(app)
+        if options.public_preview:
+            # A personal build can be the input. Keep personal signing certificates
+            # out of both Mach-O signatures in the public download.
+            for item in (app / "Contents/Helpers/LCPAgentBridge", app):
+                run("/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", item)
+            verify_app(app)
         receipt = json.loads((app / RECEIPT).read_bytes())
         info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
         version, build = info.get("CFBundleShortVersionString"), info.get("CFBundleVersion")
@@ -164,9 +170,13 @@ def package(options):
                 raise ValueError("Expected a bundle version and build number suitable for the DMG filename.")
 
         shutil.copyfile(app / RECEIPT, staged / "BuildReceipt.json")
-        signature = run("/usr/bin/codesign", "-dv", app, stderr=subprocess.PIPE).stderr.splitlines()
-        signing = ("ad-hoc; not Developer ID signed or notarized" if b"Signature=adhoc" in signature
-                   else "input signature preserved; notarization not assessed")
+        signature = run("/usr/bin/codesign", "-dvv", app, stderr=subprocess.PIPE).stderr.splitlines()
+        if b"Signature=adhoc" in signature:
+            signing = "ad-hoc; not Developer ID signed or notarized"
+        elif any(line.startswith(b"Authority=Apple Development:") for line in signature):
+            signing = "Apple Development local build"
+        else:
+            signing = "input signature preserved; notarization not assessed"
         distribution = "private local review"
         submissions = {}
         if options.sign_identity:

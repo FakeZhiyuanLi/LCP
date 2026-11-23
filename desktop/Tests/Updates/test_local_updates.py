@@ -105,6 +105,38 @@ class LocalUpdateTests(unittest.TestCase):
         self.assertIn("Already installed", self.apply())
         self.assertFalse((self.root / updates.PENDING).exists())
 
+    def test_development_identity_is_scoped_to_the_checkout_and_required_by_the_updater(self):
+        config_path = self.root / "config.json"
+        config = updates.read_json(config_path)
+        self.assertEqual(updates.build_signer(self.root), "-")
+        fingerprint = "A" * 40
+        config["developmentIdentity"] = fingerprint
+        updates.write_json(config_path, config)
+        self.assertEqual(updates.build_signer(self.root), fingerprint)
+        with self.assertRaisesRegex(ValueError, "Apple Development"):
+            updates.publish(self.new, self.root)
+        self.assertFalse((self.root / updates.PENDING).exists())
+
+        updates.write_json(config_path, {**config, "scripts": "/another/checkout"})
+        self.assertEqual(updates.build_signer(self.root), "-")
+        updates.write_json(config_path, {k: v for k, v in config.items() if k != "developmentIdentity"})
+        updates.publish(self.new, self.root)
+        updates.write_json(config_path, config)
+        with self.assertRaisesRegex(ValueError, "Apple Development"):
+            self.apply()
+        self.assertEqual(updates.identity(self.destination)["build"], 1)
+
+    def test_development_identity_selection_is_unambiguous(self):
+        first, second = "A" * 40, "B" * 40
+        listing = f'  1) {first} "Apple Development: Fictional One"\n'
+        with mock.patch.object(updates.subprocess, "check_output", return_value=listing):
+            self.assertEqual(updates.development_identity("auto"), first)
+        listing += f'  2) {second} "Apple Development: Fictional Two"\n'
+        with mock.patch.object(updates.subprocess, "check_output", return_value=listing):
+            with self.assertRaisesRegex(ValueError, "Select one"):
+                updates.development_identity("auto")
+            self.assertEqual(updates.development_identity(second.lower()), second)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,6 +26,7 @@ DOMAIN = "gui/" + str(os.getuid())
 APP = "LCP Desktop.app"
 ARCHIVE = "LCPDesktop-arm64.zip"
 PENDING = Path("queue/pending.json")
+BRIDGE_ID = "org.lcp.Desktop.AgentBridge"
 
 
 def require(condition, message):
@@ -92,6 +93,40 @@ def signature(app):
     return match[1].decode()
 
 
+def development_identity(selection):
+    listing = subprocess.check_output(["/usr/bin/security", "find-identity", "-v", "-p", "codesigning"], text=True)
+    identities = re.findall(r'^\s*\d+\)\s+([a-fA-F0-9]{40})\s+"Apple Development:[^"\n]+"', listing, re.MULTILINE)
+    fingerprints = {fingerprint.upper() for fingerprint in identities}
+    if selection == "auto":
+        require(len(fingerprints) == 1, "Select one valid Apple Development identity with --apple-development FINGERPRINT.")
+        return fingerprints.pop()
+    require(selection.upper() in fingerprints, "The selected Apple Development signing identity is unavailable.")
+    return selection.upper()
+
+
+def build_signer(root=ROOT):
+    path = root / "config.json"
+    if path.exists():
+        config = read_json(path)
+        if config.get("scripts") == str(SCRIPTS) and "developmentIdentity" in config:
+            fingerprint = config["developmentIdentity"]
+            require(isinstance(fingerprint, str) and re.fullmatch(r"[0-9A-F]{40}", fingerprint),
+                    "Invalid local signing preference. Select the Apple Development identity again.")
+            return fingerprint
+    return "-"
+
+
+def verify_development_signer(app, config):
+    fingerprint = config.get("developmentIdentity")
+    if fingerprint is None:
+        return
+    require(isinstance(fingerprint, str) and re.fullmatch(r"[0-9A-F]{40}", fingerprint), "Invalid local signing identity.")
+    for target, identifier in ((app, "org.lcp.Desktop"), (app / "Contents/Helpers/LCPAgentBridge", BRIDGE_ID)):
+        requirement = f'=anchor apple generic and certificate leaf = H"{fingerprint}" and identifier "{identifier}"'
+        check = subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "-R", requirement, target], capture_output=True)
+        require(check.returncode == 0, "Build this release with the configured Apple Development identity before installing it.")
+
+
 def running(app):
     # Use the executable path; a copy in another Applications folder is independent.
     wanted = app / "Contents/MacOS/LCPDesktop"
@@ -142,6 +177,7 @@ def publish(release, root=ROOT, automatic=False, expected=None):
             require(sha(archive) == checksum, "Release ZIP failed checksum verification.")
             candidate = unpack(archive, stage / "expanded", meta)
             code = signature(candidate)
+            verify_development_signer(candidate, config)
             if installed["build"] == meta["build"]:
                 require(installed == meta and signature(Path(config["app"])) == code,
                         "Installed release already has this build number with different contents.")
@@ -187,6 +223,7 @@ def apply(root=ROOT, capture=LEASE):
             if installed["build"] == meta["build"]:
                 require(installed == meta and signature(dest) == update["cdhash"],
                         "Installed build number matches a different app signature.")
+                verify_development_signer(dest, config)
             result = "Already installed or superseded."
         elif running(dest):
             return "Waiting for LCP Desktop to quit."
@@ -201,6 +238,7 @@ def apply(root=ROOT, capture=LEASE):
                     with tempfile.TemporaryDirectory(prefix=".lcp-desktop-update-", dir=dest.parent) as tmp:
                         staged = unpack(archive, Path(tmp), meta)
                         require(signature(staged) == update["cdhash"], "Staged app signature changed.")
+                        verify_development_signer(staged, config)
                         require(os.path.samestat(predecessor, dest.lstat()), "Installed app changed during staging.")
                         if running(dest):
                             return "Waiting for LCP Desktop to quit."
@@ -219,7 +257,7 @@ def apply(root=ROOT, capture=LEASE):
         return result
 
 
-def enable(app):
+def enable(app, apple_development=None):
     dest = app.expanduser().absolute()
     require(dest.name == APP and dest.parent in (Path("/Applications"), Path.home() / "Applications"),
             "Select the existing LCP Desktop.app in Applications.")
@@ -229,8 +267,16 @@ def enable(app):
     ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
     with lock(ROOT / "update.lock"):
         config = ROOT / "config.json"
-        if config.exists() and (ROOT / PENDING).exists():
-            require(read_json(config)["app"] == str(dest), "Finish the queued update before changing destinations.")
+        previous = read_json(config) if config.exists() else {}
+        settings = {"enabled": True, "app": str(dest), "scripts": str(SCRIPTS)}
+        if apple_development is not None:
+            settings["developmentIdentity"] = development_identity(apple_development)
+        elif previous.get("scripts") == str(SCRIPTS) and "developmentIdentity" in previous:
+            settings["developmentIdentity"] = previous["developmentIdentity"]
+        if (ROOT / PENDING).exists():
+            require(previous.get("app") == str(dest), "Finish the queued update before changing destinations.")
+            require(previous.get("developmentIdentity") == settings.get("developmentIdentity"),
+                    "Finish the queued update before changing signing identities.")
         (ROOT / "queue").mkdir(mode=0o700, exist_ok=True)
         worker = ROOT / "local_updates.py"
         atomic_bytes(worker, Path(__file__).read_bytes())
@@ -243,7 +289,7 @@ def enable(app):
         if subprocess.run(["/bin/launchctl", "print", service], capture_output=True).returncode:
             subprocess.run(["/bin/launchctl", "enable", service], check=True)
             subprocess.run(["/bin/launchctl", "bootstrap", DOMAIN, PLIST], check=True)
-        write_json(config, {"enabled": True, "app": str(dest), "scripts": str(SCRIPTS)})
+        write_json(config, settings)
     return f"Local automatic updates enabled for {dest}."
 
 
@@ -267,14 +313,20 @@ def disable():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("enable").add_argument("--app", type=Path, required=True)
+    enable_command = commands.add_parser("enable")
+    enable_command.add_argument("--app", type=Path, required=True)
+    enable_command.add_argument("--apple-development", nargs="?", const="auto", metavar="FINGERPRINT",
+                                help="remember an Apple Development identity for personal builds from this checkout")
+    commands.add_parser("build-signer", help="show this checkout's code signing selector for build-app.sh")
     commands.add_parser("publish").add_argument("release", type=Path)
     for command in ("status", "apply", "disable"):
         commands.add_parser(command)
     options = parser.parse_args()
     try:
         if options.command == "enable":
-            result = enable(options.app)
+            result = enable(options.app, options.apple_development)
+        elif options.command == "build-signer":
+            result = build_signer()
         elif not (ROOT / "config.json").exists():
             require(options.command in ("status", "disable"), "Enable local updates first.")
             result = "Local automatic updates are disabled."
@@ -288,6 +340,7 @@ def main():
             with lock(ROOT / "update.lock"):
                 config = read_json(ROOT / "config.json")
                 result = json.dumps({"enabled": config["enabled"], "app": config["app"],
+                                     "signing": "Apple Development" if config.get("developmentIdentity") else "default",
                                      "installed": identity(Path(config["app"])),
                                      "pending": read_json(ROOT / PENDING) if (ROOT / PENDING).exists() else None,
                                      "lastUpdate": read_json(ROOT / "last-update.json") if (ROOT / "last-update.json").exists() else None},
