@@ -271,7 +271,7 @@ struct MaterialLibraryView: View {
     }
 }
 
-private struct OpenWebsiteButton: View {
+struct OpenWebsiteButton: View {
     @ObservedObject var model: WorkspaceModel
     let revision: MaterialRevision
     let title: String
@@ -576,60 +576,6 @@ private struct InputContextManifestView: View {
         } else {
             Text("Agent input context unknown. Answer citations do not establish every source the agent used.").font(.caption).foregroundStyle(.secondary)
         }
-    }
-}
-
-struct CitationReaderView: View {
-    @ObservedObject var model: WorkspaceModel
-    let citation: SourceCitation
-    @Environment(\.dismiss) private var dismiss
-    @State private var passage: ResolvedPassage?
-    @State private var failure: String?
-    private var hasNewerTranscript: Bool {
-        guard citation.sourceKind == "transcript",
-              let recording = model.state.recordings.first(where: { $0.id == citation.sourceID && $0.classID == citation.classID }),
-              let current = recording.currentTranscriptRevisionID else { return false }
-        return current != citation.revisionID
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(passage?.title ?? citation.label).font(.title2.bold())
-                    Text("Exact \(citation.sourceKind) revision · \(String(citation.payloadSHA256.prefix(16)))").font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-                }
-                Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
-            Divider()
-            if hasNewerTranscript {
-                Label("A newer transcript is available. To change the citation on a saved entry, choose Correct in class history.", systemImage: "clock.arrow.circlepath")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            if let failure { ContentUnavailableView("Source Unavailable", systemImage: "doc.badge.exclamationmark", description: Text(failure + " The citation has not been redirected to a newer revision.")) }
-            else if let passage {
-                ScrollView { Text(passage.text).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled).padding(10) }.background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
-            } else { ProgressView("Resolving the exact source…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-            HStack {
-                Button("Copy Citation Link", systemImage: "link") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(CitationLink.url(for: citation).absoluteString, forType: .string) }
-                Button("Retain Citation", systemImage: "pin") { guard let repository = model.repository else { return }; model.perform { _ = try RetrievalService(repository: repository).pin(citation); model.notice = "Exact source retained in portable backups." } }
-                if citation.sourceKind == "material",
-                   let revision = model.state.materialRevisions.first(where: { $0.id == citation.revisionID && $0.materialID == citation.sourceID }),
-                   let material = model.state.materials.first(where: { $0.id == revision.materialID && $0.classID == citation.classID }) {
-                    if material.kind == MaterialService.webLinkKind {
-                        if let passage { OpenWebsiteButton(model: model, revision: revision, title: passage.title) }
-                    } else {
-                        Button("Open Original") { model.openOriginal(revision) }
-                        if let source = revision.importedSource, source.url.scheme?.lowercased() == "https",
-                           let url = try? MaterialService.validatedWebURL(source.url.absoluteString) {
-                            Link("Open Service Page", destination: url)
-                                .accessibilityLabel("Open service page for \(source.title)")
-                        }
-                    }
-                }
-                Spacer()
-            }
-        }.padding(24).frame(minWidth: 760, idealWidth: 880, minHeight: 580, idealHeight: 720)
-            .task { guard let repository = model.repository else { return }; do { passage = try RetrievalService(repository: repository).resolve(citation) } catch { failure = error.localizedDescription } }
     }
 }
 

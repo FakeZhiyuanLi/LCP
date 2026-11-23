@@ -428,6 +428,23 @@ public struct UciCanvasClient: Sendable {
                                   data: Data(text.utf8), sourceURL: source, remoteID: remoteID, courseworkContext: courseworkContext)
     }
 
+    /// Returns the original instructions only when the entire generated header agrees
+    /// with the saved revision. An unknown format stays readable as ordinary source text.
+    public static func courseworkInstructions(in text: String, facts: ImportedCourseworkContext, source: URL) -> String? {
+        let separator = text.range(of: "\n\n")
+        let header = text[..<(separator?.lowerBound ?? text.endIndex)].components(separatedBy: "\n")
+        var expected = [facts.title]
+        if let due = facts.dueAt {
+            guard header.count > 1, header[1].hasPrefix("Due: "),
+                  (try? deadline(String(header[1].dropFirst("Due: ".count)))) == due else { return nil }
+            expected.append(header[1])
+        }
+        if let submission = facts.submissionState { expected.append("Canvas submission: " + submission.rawValue) }
+        expected.append(source.absoluteString)
+        guard header == expected else { return nil }
+        return separator.map { String(text[$0.upperBound...]) } ?? ""
+    }
+
     private func externalDocument(title: String, source: URL, remoteID: String) throws -> UniversityDocument {
         let text = [title, "Canvas external link", source.absoluteString].joined(separator: "\n")
         return UniversityDocument(filename: filename(title, fallback: "Canvas external link") + ".txt",
