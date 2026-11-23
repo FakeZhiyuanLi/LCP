@@ -10,16 +10,16 @@ final class ChatWindowLayoutTests: XCTestCase {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = WorkspaceModel(arguments: ["--profile-root", root.path, "--demo"])
-        let enrollment = try XCTUnwrap(model.activeClasses.first)
         let provider = AgentProviderProfile(name: "Fictional provider", baseURL: "https://example.invalid/v1",
                                            model: "fictional-model")
 
-        for var chat in [ClassChatView(model: model, globalScope: true), ClassChatView(model: model, classID: enrollment.id)] {
-            chat.loadProfiles = { _ in
-                await Task.yield()
-                return [provider]
-            }
+        let providers = ChatProviders(profiles: { _ in
+            await Task.yield()
+            return [provider]
+        })
+        let model = WorkspaceModel(arguments: ["--profile-root", root.path, "--demo"], chatProviders: providers)
+        let enrollment = try XCTUnwrap(model.activeClasses.first)
+        for chat in [ClassChatView(model: model), ClassChatView(model: model, classID: enrollment.id)] {
             let workspace = NavigationSplitView {
                 Text("Class Library").navigationSplitViewColumnWidth(min: 208, ideal: 232, max: 310)
             } detail: {

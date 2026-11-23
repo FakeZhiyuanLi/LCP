@@ -74,7 +74,7 @@ final class WorkspaceModel: ObservableObject {
     private var canvasSyncLastAttempt: Date?
     private var captureSubscriptions = Set<AnyCancellable>()
     @Published var rootURL: URL {
-        didSet { if rootURL != oldValue { unsavedChatReplies.removeAll() } }
+        didSet { if rootURL != oldValue { resetChatSessions() } }
     }
     private let usesPersistentProfilePreference: Bool
     private var lastImportedFeedIndex: Data?
@@ -136,7 +136,8 @@ final class WorkspaceModel: ObservableObject {
         "LCPDesktop.canvasSyncLastRun.\(root.standardizedFileURL.path)"
     }
 
-    init(arguments: [String] = ProcessInfo.processInfo.arguments) {
+    init(arguments: [String] = ProcessInfo.processInfo.arguments, chatProviders: ChatProviders = .init()) {
+        self.chatProviders = chatProviders
         usesPersistentProfilePreference = !arguments.contains("--profile-root") && !arguments.contains("--demo") && ProcessInfo.processInfo.environment["LCP_DESKTOP_ROOT"] == nil
         if let index = arguments.firstIndex(of: "--profile-root"), arguments.indices.contains(index + 1) {
             rootURL = URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
@@ -570,6 +571,7 @@ final class WorkspaceModel: ObservableObject {
             try await repository.restoreBackupInBackground(from: url, expectedRevision: expectedRevision) {
                 try self.verifyRestoreCanCommit(dismissing: closingConfirmation)
             }
+            resetChatSessions()
             state = repository.state
             missingPayloadCount = repository.unavailablePayloads.count
             selection = .welcome
@@ -607,6 +609,7 @@ final class WorkspaceModel: ObservableObject {
     private func startTransfer(_ transfer: LibraryTransfer, operation: @escaping @MainActor () async throws -> Void) {
         guard libraryTransfer == nil else { return }
         if transfer == .restore {
+            for session in chatSessions.values { session.stop() }
             canvasSyncTask?.cancel()
             canvasSyncTask = nil
             canvasSyncInProgress = false
@@ -659,6 +662,21 @@ final class WorkspaceModel: ObservableObject {
     @Published var plannerClassID: UUID?
     @Published var chatClassID: UUID?
     @Published private(set) var unsavedChatReplies: [UUID?: UnsavedChatReply] = [:]
+    let chatProviders: ChatProviders
+    private var chatSessions: [UUID?: ChatSession] = [:]
+
+    func chatSession(for classID: UUID?) -> ChatSession {
+        if let session = chatSessions[classID] { return session }
+        let session = ChatSession(classID: classID)
+        chatSessions[classID] = session
+        return session
+    }
+
+    private func resetChatSessions() {
+        for session in chatSessions.values { session.stop() }
+        chatSessions.removeAll()
+        unsavedChatReplies.removeAll()
+    }
 
     func openClassChat(for classID: UUID) {
         guard state.classes.contains(where: { $0.id == classID }) else { return }

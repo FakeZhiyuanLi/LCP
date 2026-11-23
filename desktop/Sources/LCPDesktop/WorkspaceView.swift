@@ -25,7 +25,7 @@ struct WorkspaceView: View {
                     case .capture: CaptureWorkspaceView(model: model)
                     case .universityConnections: ConnectionsOverview(model: model).id(model.rootURL)
                     case .planner: ClassPlannerView(model: model, globalScope: true)
-                    case .universityChat: ClassChatView(model: model, globalScope: true)
+                    case .universityChat: ClassChatView(model: model).id(model.rootURL)
                     case .connections: AgentConnectionsView(model: model)
                     case .review: ProposalReviewView(model: model)
                     default: WelcomeView(model: model)
@@ -554,7 +554,7 @@ struct ClassContextView: View {
                 case .planner:
                     ClassPlannerView(model: model, classID: enrollment.id)
                 case .chat:
-                    ClassChatView(model: model, classID: enrollment.id)
+                    ClassChatView(model: model, classID: enrollment.id).id(model.rootURL)
                 case .materials:
                     MaterialLibraryView(model: model, classID: enrollment.id, expandedMaterial: $expandedMaterial, filter: $materialFilter)
                 case .history:

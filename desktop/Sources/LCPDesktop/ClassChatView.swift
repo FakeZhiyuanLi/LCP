@@ -5,57 +5,27 @@ import LCPContextServices
 
 struct ClassChatView: View {
     @ObservedObject var model: WorkspaceModel
-    let classID: UUID?
-    let globalScope: Bool
-    var loadProfiles: @MainActor (URL) async throws -> [AgentProviderProfile] = { root in
-        try await AgentProviderCredentials.forLibrary(root).profilesListAsync()
-    }
-
+    @ObservedObject private var session: ChatSession
     @State private var profiles: [AgentProviderProfile] = []
-    @State private var selectedProfileID: UUID?
-    @State private var draft = ""
-    @State private var context: ClassPlannerContext?
     @State private var loadingContext = false
-    @State private var sending = false
-    @State private var status: String?
-    @State private var errorDetails: String?
-    @State private var generationPhase: GenerationPhase = .idle
-    @State private var generationTask: Task<Void, Never>?
-    @State private var profileTask: Task<Void, Never>?
     @State private var contextTask: Task<Void, Never>?
-    @State private var activeGenerationID: UUID?
-    @State private var activeRequest: String?
-    @State private var streamingText = ""
-    @State private var streamingUsage: TokenUsage?
-    @State private var streamingRequestID: String?
-    @State private var generationStartedAt: Date?
 
     private let streamingBubbleID = "lcp-chat-streaming-bubble"
-    private var credentials: AgentProviderCredentials { AgentProviderCredentials.forLibrary(model.rootURL) }
-    private var selectedProfile: AgentProviderProfile? { profiles.first { $0.id == selectedProfileID } }
-    private var activeClassIDs: [UUID] {
-        if let classID { return [classID] }
-        return model.activeClasses.map(\.id)
-    }
-    private var thread: ChatThread? { model.chatThread(classID: classID) }
-    private var messages: [ChatMessage] { thread?.messages ?? [] }
-    private var unsavedReply: UnsavedChatReply? { model.unsavedChatReplies[classID] }
+    private var globalScope: Bool { session.classID == nil }
+    private var sending: Bool { session.generation != nil }
+    private var selectedProfile: AgentProviderProfile? { profiles.first { $0.id == session.selectedProfileID } }
+    private var activeClassIDs: [UUID] { session.classIDs(in: model) }
+    private var messages: [ChatMessage] { model.chatThread(classID: session.classID)?.messages ?? [] }
+    private var unsavedReply: UnsavedChatReply? { model.unsavedChatReplies[session.classID] }
 
-    init(model: WorkspaceModel, classID: UUID) {
+    init(model: WorkspaceModel, classID: UUID? = nil) {
         self.model = model
-        self.classID = classID
-        self.globalScope = false
-    }
-
-    init(model: WorkspaceModel, globalScope: Bool) {
-        self.model = model
-        self.classID = nil
-        self.globalScope = globalScope
+        self.session = model.chatSession(for: classID)
     }
 
     var body: some View {
         Group {
-            if profiles.isEmpty && unsavedReply == nil {
+            if profiles.isEmpty && messages.isEmpty && session.draft.isEmpty && !sending && unsavedReply == nil {
                 ScrollView {
                     VStack(spacing: 0) {
                         header
@@ -70,7 +40,7 @@ struct ClassChatView: View {
                     Divider()
                     contextSummary
                     messageList
-                    if sending { generationBanner }
+                    if let generation = session.generation { generationBanner(generation) }
                     composer
                 }
             }
@@ -79,21 +49,14 @@ struct ClassChatView: View {
         // fit the pane even when its wrapped text reports a tall minimum.
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
         .background(WorkspacePalette.canvas)
-        .onAppear {
-            refreshProfiles()
-        }
-        .onChange(of: model.rootURL) { _, _ in
-            refreshProfiles()
-            if context != nil { scheduleContextRefresh() }
-        }
+        .task(id: ObjectIdentifier(session)) { await refreshProfiles() }
         .onChange(of: model.state.revision) { _, _ in
-            guard !sending, context != nil else { return }
+            guard !sending, session.context != nil else { return }
             scheduleContextRefresh()
         }
         .onDisappear {
-            profileTask?.cancel()
             contextTask?.cancel()
-            cancelGeneration()
+            loadingContext = false
         }
     }
 
@@ -103,7 +66,7 @@ struct ClassChatView: View {
                 Label(globalScope ? "University chat" : "Class chat", systemImage: "bubble.left.and.bubble.right.fill")
                     .font(.title2.weight(.semibold))
                 Spacer(minLength: 12)
-                if sending { generationStatus }
+                if let generation = session.generation { generationStatus(generation) }
             }
             Text(globalScope
                  ? "A persistent study conversation grounded in the active classes in your LCP library."
@@ -123,25 +86,23 @@ struct ClassChatView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var generationStatus: some View {
+    private func generationStatus(_ generation: ChatSession.Generation) -> some View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
             HStack(spacing: 7) {
                 ProgressView()
                     .controlSize(.small)
-                Text(generationPhase.label)
+                Text(generation.phase.label)
                     .font(.caption.weight(.semibold))
-                if let generationStartedAt {
-                    Text(elapsedLabel(at: timeline.date.timeIntervalSince(generationStartedAt)))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(WorkspacePalette.muted)
-                }
+                Text(elapsedLabel(at: timeline.date.timeIntervalSince(generation.startedAt)))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(WorkspacePalette.muted)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(WorkspacePalette.tintSurface, in: Capsule())
             .overlay { Capsule().strokeBorder(WorkspacePalette.line.opacity(0.75)) }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(generationPhase.label), \(generationStartedAt.map { elapsedLabel(at: timeline.date.timeIntervalSince($0)) } ?? "")")
+            .accessibilityLabel("\(generation.phase.label), \(elapsedLabel(at: timeline.date.timeIntervalSince(generation.startedAt)))")
         }
     }
 
@@ -183,11 +144,11 @@ struct ClassChatView: View {
                     .help("Refresh the class context")
                     .disabled(loadingContext || sending || activeClassIDs.isEmpty)
             }
-            if let context {
+            if let context = session.context {
                 HStack(spacing: 7) {
                     contextBadge(systemImage: "square.stack.3d.up", text: "\(context.sourceCount) sources")
-                    contextBadge(systemImage: "text.alignleft", text: byteLabel(context.markdown.utf8.count))
-                    contextBadge(systemImage: "arrow.triangle.2.circlepath", text: "revision \(context.repositoryRevision)")
+                    contextBadge(systemImage: "text.alignleft", text: byteLabel(context.byteCount))
+                    contextBadge(systemImage: "arrow.triangle.2.circlepath", text: "revision \(context.revision)")
                     Spacer(minLength: 0)
                 }
                 Text(context.classLabels.joined(separator: " · "))
@@ -232,7 +193,7 @@ struct ClassChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    if messages.isEmpty && activeRequest == nil && unsavedReply == nil {
+                    if messages.isEmpty && !sending && unsavedReply == nil {
                         VStack(alignment: .leading, spacing: 9) {
                             Label(globalScope ? "Start your university conversation" : "Start your class conversation", systemImage: "sparkles")
                                 .font(.headline)
@@ -253,11 +214,11 @@ struct ClassChatView: View {
                             }
                             .id(message.id)
                         }
-                        if let activeRequest {
-                            pendingUserBubble(activeRequest)
+                        if let generation = session.generation {
+                            pendingUserBubble(generation.question)
                                 .id("lcp-chat-pending-user")
-                            StreamingMessageBubble(text: streamingText, provider: selectedProfile?.name ?? "Agent",
-                                                   usage: streamingUsage, requestID: streamingRequestID)
+                            StreamingMessageBubble(text: generation.update?.text ?? "", provider: generation.providerName,
+                                                   usage: generation.update?.usage, requestID: generation.update?.requestID)
                                 .id(streamingBubbleID)
                         } else if let unsavedReply {
                             pendingUserBubble(unsavedReply.question, status: "unsaved")
@@ -273,9 +234,10 @@ struct ClassChatView: View {
                 .frame(maxWidth: 920, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .onAppear { scrollToLatest(proxy, animated: false) }
             .onChange(of: messages.count) { _, _ in scrollToLatest(proxy) }
-            .onChange(of: streamingText) { _, _ in scrollToLatest(proxy) }
-            .onChange(of: activeRequest) { _, _ in scrollToLatest(proxy) }
+            .onChange(of: session.generation?.update?.text) { _, _ in scrollToLatest(proxy) }
+            .onChange(of: session.generation?.id) { _, _ in scrollToLatest(proxy) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -301,24 +263,24 @@ struct ClassChatView: View {
         .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WorkspacePalette.line) }
     }
 
-    private var generationBanner: some View {
+    private func generationBanner(_ generation: ChatSession.Generation) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "wand.and.stars")
                 .foregroundStyle(WorkspacePalette.accent)
             VStack(alignment: .leading, spacing: 2) {
-                Text(generationPhase.label)
+                Text(generation.phase.label)
                     .font(.callout.weight(.semibold))
-                Text(generationPhase.detail)
+                Text(generation.phase.detail)
                     .font(.caption)
                     .foregroundStyle(WorkspacePalette.muted)
             }
             Spacer(minLength: 10)
-            if let streamingUsage, let summary = usageLabel(streamingUsage) {
+            if let summary = usageLabel(generation.update?.usage) {
                 Text(summary)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(WorkspacePalette.muted)
             }
-            Button("Stop", systemImage: "stop.circle.fill") { cancelGeneration() }
+            Button("Stop", systemImage: "stop.circle.fill") { session.stop() }
                 .buttonStyle(.bordered)
                 .tint(.orange)
                 .keyboardShortcut(.escape, modifiers: [])
@@ -332,14 +294,14 @@ struct ClassChatView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 9) {
             ZStack(alignment: .topLeading) {
-                if draft.isEmpty && !sending {
+                if session.draft.isEmpty && !sending {
                     Text(globalScope ? "Ask about your university context…" : "Ask about this class…")
                         .foregroundStyle(WorkspacePalette.muted.opacity(0.85))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 14)
                         .allowsHitTesting(false)
                 }
-                TextEditor(text: $draft)
+                TextEditor(text: $session.draft)
                     .font(.body)
                     .scrollContentBackground(.hidden)
                     .padding(8)
@@ -352,9 +314,12 @@ struct ClassChatView: View {
             statusRow
             HStack(alignment: .center, spacing: 10) {
                 Menu {
+                    if profiles.isEmpty {
+                        Button("Add BYOK Provider…", systemImage: "key") { model.presentedEditor = .newBYOKProvider }
+                    }
                     ForEach(profiles) { profile in
                         Button {
-                            selectedProfileID = profile.id
+                            session.selectedProfileID = profile.id
                         } label: {
                             HStack {
                                 Text(profile.name)
@@ -372,23 +337,25 @@ struct ClassChatView: View {
                 .menuStyle(.borderlessButton)
                 .frame(maxWidth: 280, alignment: .leading)
                 .accessibilityLabel("Agent provider")
-                if status == nil {
+                if session.status == nil {
                     Text("Enter to ask LCP about the saved context")
                         .font(.caption2)
                         .foregroundStyle(WorkspacePalette.muted)
                 }
                 Spacer(minLength: 8)
-                Text("\(draft.utf8.count)/4,096")
+                Text("\(session.draft.utf8.count)/4,096")
                     .font(.caption2.monospacedDigit())
-                    .foregroundStyle(draft.utf8.count > 4_096 ? .red : WorkspacePalette.muted)
+                    .foregroundStyle(session.draft.utf8.count > 4_096 ? .red : WorkspacePalette.muted)
                 if sending {
-                    Button("Stop", systemImage: "stop.fill") { cancelGeneration() }
+                    Button("Stop", systemImage: "stop.fill") { session.stop() }
                         .buttonStyle(.bordered)
                         .tint(.orange)
                 } else {
-                    Button("Send", systemImage: "arrow.up.circle.fill") { send() }
+                    Button("Send", systemImage: "arrow.up.circle.fill") {
+                        if let selectedProfile { session.send(in: model, using: selectedProfile) }
+                    }
                         .buttonStyle(.borderedProminent)
-                        .disabled(unsavedReply != nil || activeClassIDs.isEmpty || selectedProfile == nil || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(unsavedReply != nil || activeClassIDs.isEmpty || selectedProfile == nil || session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .keyboardShortcut(.return, modifiers: [.command])
                 }
             }
@@ -408,8 +375,8 @@ struct ClassChatView: View {
                     .font(.caption).foregroundStyle(.orange)
                 HStack {
                     Button("Retry Save") {
-                        saveReply(unsavedReply.question, result: unsavedReply.result,
-                                  profile: unsavedReply.profile, diagnostics: unsavedReply.diagnostics)
+                        session.saveReply(in: model, question: unsavedReply.question, result: unsavedReply.result,
+                                          profile: unsavedReply.profile, diagnostics: unsavedReply.diagnostics)
                     }
                     Button("Copy Reply") {
                         NSPasteboard.general.clearContents()
@@ -420,16 +387,16 @@ struct ClassChatView: View {
                         NSPasteboard.general.setString(unsavedReply.errorDetails, forType: .string)
                     }
                     Button("Discard Unsaved Reply", role: .destructive) {
-                        model.discardUnsavedChatReply(classID: classID)
+                        model.discardUnsavedChatReply(classID: session.classID)
                     }
                 }.controlSize(.small)
             }
-        } else if let status {
+        } else if let status = session.status {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Label(status, systemImage: "exclamationmark.circle")
                     .font(.caption)
                     .foregroundStyle(.orange)
-                if let errorDetails {
+                if let errorDetails = session.errorDetails {
                     Button("Copy Error Details") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(errorDetails, forType: .string)
@@ -439,30 +406,20 @@ struct ClassChatView: View {
         }
     }
 
-    private func reportFailure(_ message: String, stage: AgentRequestDiagnostics.ChatStage,
-                               diagnostics: AgentRequestDiagnostics, error: AgentProviderError? = nil) {
-        diagnostics.chatStage(stage, failed: true, error: error)
-        status = message
-        errorDetails = diagnostics.supportDetails(stage: stage, error: error)
-    }
-
-    private func refreshProfiles() {
-        profileTask?.cancel()
-        let root = model.rootURL
+    private func refreshProfiles() async {
         let diagnostics = AgentRequestDiagnostics()
         diagnostics.chatStage(.profiles)
-        profileTask = Task { @MainActor in
-            do {
-                let values = try await loadProfiles(root).filter(\.enabled)
-                guard !Task.isCancelled else { return }
-                profiles = values
-                if selectedProfileID == nil || !profiles.contains(where: { $0.id == selectedProfileID }) {
-                    selectedProfileID = profiles.first?.id
-                }
-            } catch {
-                guard !Task.isCancelled else { return }
-                reportFailure(error.localizedDescription, stage: .profiles, diagnostics: diagnostics, error: error as? AgentProviderError)
+        do {
+            let values = try await model.chatProviders.profiles(model.rootURL).filter(\.enabled)
+            try Task.checkCancellation()
+            profiles = values
+            if !values.contains(where: { $0.id == session.selectedProfileID }) {
+                session.selectedProfileID = values.first?.id
             }
+        } catch {
+            guard !Task.isCancelled else { return }
+            profiles = []
+            session.reportFailure(error, stage: .profiles, diagnostics: diagnostics)
         }
     }
 
@@ -471,7 +428,7 @@ struct ClassChatView: View {
         guard let repository = model.repository else { return }
         let ids = activeClassIDs
         guard !ids.isEmpty else {
-            context = nil
+            session.context = nil
             loadingContext = false
             return
         }
@@ -486,117 +443,26 @@ struct ClassChatView: View {
             do {
                 let prepared = try ClassPlannerService(repository: repository).makeContext(classIDs: ids)
                 guard !Task.isCancelled else { return }
-                context = prepared
-                if !sending { status = nil; errorDetails = nil }
+                session.context = .init(prepared)
+                if !sending { session.status = nil; session.errorDetails = nil }
             } catch is CancellationError {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
-                reportFailure(error.localizedDescription, stage: .context, diagnostics: diagnostics)
+                session.reportFailure(error, stage: .context, diagnostics: diagnostics)
             }
             loadingContext = false
             contextTask = nil
         }
     }
 
-    private func send() {
-        guard generationTask == nil, unsavedReply == nil, let repository = model.repository, let profile = selectedProfile else { return }
-        let ids = activeClassIDs
-        errorDetails = nil
-        guard !ids.isEmpty else {
-            status = "No class context is available for this chat."
-            return
-        }
-        let request = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !request.isEmpty, request.utf8.count <= 4_096 else {
-            status = "Keep each chat message under 4,096 bytes."
-            return
-        }
-        let history = thread?.messages ?? []
-        let generationID = UUID()
-        let diagnostics = AgentRequestDiagnostics(id: generationID)
-        activeGenerationID = generationID
-        activeRequest = request
-        streamingText = ""
-        streamingUsage = nil
-        streamingRequestID = nil
-        generationStartedAt = Date()
-        generationPhase = .preparing
-        sending = true
-        status = nil
-        draft = ""
-
-        generationTask = Task { @MainActor in
-            defer {
-                if activeGenerationID == generationID {
-                    generationTask = nil
-                    sending = false
-                    generationPhase = .idle
-                    activeGenerationID = nil
-                    activeRequest = nil
-                    streamingText = ""
-                    streamingUsage = nil
-                    streamingRequestID = nil
-                    generationStartedAt = nil
-                }
+    private func scrollToLatest(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        withAnimation(animated ? .easeOut(duration: 0.2) : nil) {
+            if sending || unsavedReply != nil {
+                proxy.scrollTo(streamingBubbleID, anchor: .bottom)
+            } else if let last = messages.last {
+                proxy.scrollTo(last.id, anchor: .bottom)
             }
-            var stage = AgentRequestDiagnostics.ChatStage.credential
-            do {
-                // Let SwiftUI render the preparing state before the bounded
-                // context snapshot starts on the main actor.
-                await Task.yield()
-                try Task.checkCancellation()
-                diagnostics.chatStage(stage)
-                let key = try await credentials.apiKeyAsync(for: profile)
-                try Task.checkCancellation()
-                stage = .generation
-                let result = try await ClassPlannerService(repository: repository).generateChatStream(
-                    classIDs: ids, history: history, message: request, profile: profile, apiKey: key,
-                    diagnostics: diagnostics, onRequestReady: {
-                        generationPhase = .waiting
-                    }, onUpdate: { update in
-                        Task { @MainActor in
-                            guard self.activeGenerationID == generationID, self.generationPhase != .cancelling else { return }
-                            if !update.text.isEmpty { self.generationPhase = .streaming }
-                            self.streamingText = update.text
-                            self.streamingUsage = update.usage
-                            self.streamingRequestID = update.requestID
-                        }
-                    })
-                guard activeGenerationID == generationID, model.repository === repository else { return }
-                saveReply(request, result: result, profile: profile, diagnostics: diagnostics)
-            } catch is CancellationError {
-                guard activeGenerationID == generationID else { return }
-                draft = request
-                status = "Generation cancelled. Your message is back in the composer."
-            } catch {
-                guard activeGenerationID == generationID else { return }
-                draft = request
-                let providerError = error as? AgentProviderError
-                let failedStage = stage == .generation && providerError == nil ? .context : stage
-                reportFailure(error.localizedDescription, stage: failedStage, diagnostics: diagnostics, error: providerError)
-            }
-        }
-    }
-
-    private func saveReply(_ request: String, result: ClassPlanResult, profile: AgentProviderProfile,
-                           diagnostics: AgentRequestDiagnostics) {
-        if model.saveChatReply(classID: classID, question: request, result: result, profile: profile, diagnostics: diagnostics) {
-            context = result.context
-        }
-    }
-
-    private func cancelGeneration() {
-        guard sending else { return }
-        generationPhase = .cancelling
-        generationTask?.cancel()
-    }
-
-    private func scrollToLatest(_ proxy: ScrollViewProxy) {
-        if activeRequest != nil || unsavedReply != nil {
-            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(streamingBubbleID, anchor: .bottom) }
-        } else if let last = messages.last {
-            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
         }
     }
 
@@ -627,16 +493,9 @@ struct ClassChatView: View {
     }
 }
 
-private enum GenerationPhase {
-    case idle
-    case preparing
-    case waiting
-    case streaming
-    case cancelling
-
+private extension ChatSession.Phase {
     var label: String {
         switch self {
-        case .idle: return "Ready"
         case .preparing: return "Preparing context"
         case .waiting: return "Waiting for provider"
         case .streaming: return "Writing response"
@@ -646,7 +505,6 @@ private enum GenerationPhase {
 
     var detail: String {
         switch self {
-        case .idle: return ""
         case .preparing: return "Reviewing the latest saved sources…"
         case .waiting: return "LCP is waiting for the first part of the answer."
         case .streaming: return "The answer will appear here as it arrives."
