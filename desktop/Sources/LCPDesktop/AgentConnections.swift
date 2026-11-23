@@ -355,58 +355,106 @@ private struct GrantCard: View {
     }
 }
 
+struct LocalAgentGrantDraft {
+    var name = "Codex (local MCP)"
+    var classIDs: Set<UUID> = []
+    var allowProposals = false
+    var scope = ContextScopeDraft()
+
+    func canCreate(visibleClassIDs: Set<UUID>, availableMaterialIDs: Set<UUID>) -> Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            (1...128).contains(classIDs.count) && classIDs.isSubset(of: visibleClassIDs) &&
+            scope.isValid && (!scope.materialsOnly || scope.materialIDs.isSubset(of: availableMaterialIDs))
+    }
+
+    func create(in state: inout ContextState, includingArchived: Bool) throws {
+        let groups = state.visibleClassGroups(includingArchived: includingArchived)
+        let visibleClassIDs = Set(groups.flatMap { $0.classes.map(\.id) })
+        let availableMaterialIDs = Set(state.materials.lazy.filter { classIDs.contains($0.classID) }.map(\.id))
+        guard canCreate(visibleClassIDs: visibleClassIDs, availableMaterialIDs: availableMaterialIDs) else {
+            throw DesktopUIError.message("The available classes or materials changed. Review your selection before creating the grant.")
+        }
+        let connection = AgentConnection(name: name.trimmingCharacters(in: .whitespacesAndNewlines), mode: "stdio",
+            capabilities: allowProposals ? ["read_context", "propose_note", "propose_study_log"] : ["read_context"])
+        let grant = AgentGrant(connectionID: connection.id, allowedClassIDs: classIDs.sorted { $0.uuidString < $1.uuidString },
+            allowedMaterialIDs: scope.selectedMaterialIDs, eventFrom: scope.from, eventUntil: scope.until)
+        state.connections.append(connection)
+        state.grants.append(grant)
+    }
+}
+
 struct NewAgentGrantView: View {
     @ObservedObject var model: WorkspaceModel
     @Environment(\.dismiss) private var dismiss
-    @State private var name = "Codex (local MCP)"
-    @State private var selectedClassIDs: Set<UUID> = []
-    @State private var allowProposals = false
-    @State private var scope = ContextScopeDraft()
-    private var materials: [SourceMaterial] {
-        model.state.materials.filter { selectedClassIDs.contains($0.classID) }
-            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-    }
+    @State private var draft = LocalAgentGrantDraft()
+    @State private var saveError: String?
+
     var body: some View {
-        EditorFrame(title: "Create Scoped Agent Access", canSave: !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !selectedClassIDs.isEmpty && selectedClassIDs.count <= 128 && scope.isValid, saveLabel: "Create Grant", save: save) {
+        let groups = model.visibleClassGroups
+        let visibleClassIDs = Set(groups.flatMap { $0.classes.map(\.id) })
+        let selectedClassIDs = draft.classIDs.intersection(visibleClassIDs)
+        let materials = model.state.materials.filter { selectedClassIDs.contains($0.classID) }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        let availableMaterialIDs = Set(materials.map(\.id))
+        let canSave = draft.canCreate(visibleClassIDs: visibleClassIDs, availableMaterialIDs: availableMaterialIDs)
+        EditorFrame(title: "Create Scoped Agent Access", canSave: canSave, saveLabel: "Create Grant", save: save) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    TextField("Client Name", text: $name).textFieldStyle(.roundedBorder)
+                    if let saveError { Text(saveError).foregroundStyle(.red) }
+                    TextField("Client Name", text: $draft.name).textFieldStyle(.roundedBorder)
                     Text("Allowed classes").font(.headline)
-                    ForEach(model.state.classes) { enrollment in
-                        Toggle(isOn: Binding(get: { selectedClassIDs.contains(enrollment.id) }, set: {
-                            if $0 { selectedClassIDs.insert(enrollment.id) } else { selectedClassIDs.remove(enrollment.id) }
-                            scope.materialIDs.formIntersection(Set(materials.map(\.id)))
-                        })) {
-                            VStack(alignment: .leading) {
-                                Text(enrollment.displayLabel)
-                                Text(model.state.terms.first { $0.id == enrollment.termID }?.name ?? "").font(.caption).foregroundStyle(.secondary)
-                            }
-                        }.toggleStyle(.checkbox)
+                    if visibleClassIDs.isEmpty {
+                        Text(model.state.classes.isEmpty ? "Add a class to create a grant." : "Turn on Archived in the sidebar to choose an archived class.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(groups) { group in
+                        ForEach(group.classes) { enrollment in
+                            Toggle(isOn: Binding(get: { draft.classIDs.contains(enrollment.id) }, set: {
+                                if $0 { draft.classIDs.insert(enrollment.id) } else { draft.classIDs.remove(enrollment.id) }
+                            })) {
+                                VStack(alignment: .leading) {
+                                    Text(enrollment.displayLabel)
+                                    HStack {
+                                        if let term = group.term { Text(term.name) }
+                                        if enrollment.archived || group.term?.archived == true { Text("Archived") }
+                                    }.font(.caption).foregroundStyle(.secondary)
+                                }
+                            }.toggleStyle(.checkbox)
+                        }
                     }
                     Divider()
-                    SourceScopeControls(state: model.state, materials: materials, materialsOnly: $scope.materialsOnly, selectedMaterialIDs: $scope.materialIDs,
-                        timeLimited: $scope.timeLimited, eventFrom: $scope.eventFrom, eventUntil: $scope.eventUntil)
-                    Toggle("Allow proposals for notes and study logs", isOn: $allowProposals)
+                    SourceScopeControls(state: model.state, materials: materials, materialsOnly: $draft.scope.materialsOnly, selectedMaterialIDs: $draft.scope.materialIDs,
+                        timeLimited: $draft.scope.timeLimited, eventFrom: $draft.scope.eventFrom, eventUntil: $draft.scope.eventUntil)
+                    Toggle("Allow proposals for notes and study logs", isOn: $draft.allowProposals)
                     Text("Proposals require your review. This never grants permission to silently change sources, official deadlines, grades, recording controls, or class mappings.").font(.caption).foregroundStyle(.secondary)
                     GroupBox("Access to create") {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("\(selectedClassIDs.count) selected class(es) · " + (scope.materialsOnly ? "\(scope.materialIDs.count) selected documents only" : "all class source types"))
-                            Text(scope.timeLimited ? "Inclusive source times: \(scope.eventFrom.formatted()) through \(scope.eventUntil.formatted())." : "No source time limit.")
+                            Text("\(selectedClassIDs.count) selected class(es) · " + (draft.scope.materialsOnly ? "\(draft.scope.materialIDs.intersection(availableMaterialIDs).count) selected documents only" : "all class source types"))
+                            Text(draft.scope.timeLimited ? "Inclusive source times: \(draft.scope.eventFrom.formatted()) through \(draft.scope.eventUntil.formatted())." : "No source time limit.")
                             Text("The bridge enforces this scope for future reads, direct citation requests, and snapshot exports.").font(.caption).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
                     }
                     Text("Transport: local stdio MCP. This creates no network listener and sends no context until you configure and use the client.").font(.caption).foregroundStyle(.secondary)
                 }.padding(.bottom, 16)
             }
-        }.onAppear { if let id = model.selectedClassID { selectedClassIDs.insert(id) } }
+        }
+        .onAppear {
+            if let id = model.selectedClassID, visibleClassIDs.contains(id) { draft.classIDs.insert(id) }
+        }
+        .onChange(of: visibleClassIDs) { _, ids in draft.classIDs.formIntersection(ids) }
+        .onChange(of: availableMaterialIDs) { _, ids in draft.scope.materialIDs.formIntersection(ids) }
     }
+
     private func save() {
-        guard scope.isValid, !scope.materialsOnly || scope.materialIDs.isSubset(of: Set(materials.map(\.id))) else { return }
-        let connection = AgentConnection(name: name.trimmingCharacters(in: .whitespacesAndNewlines), mode: "stdio", capabilities: allowProposals ? ["read_context", "propose_note", "propose_study_log"] : ["read_context"])
-        let grant = AgentGrant(connectionID: connection.id, allowedClassIDs: selectedClassIDs.sorted { $0.uuidString < $1.uuidString },
-            allowedMaterialIDs: scope.selectedMaterialIDs, eventFrom: scope.from, eventUntil: scope.until)
-        model.mutate { $0.connections.append(connection); $0.grants.append(grant) }
-        if model.errorMessage == nil { dismiss() }
+        guard let repository = model.repository else { return }
+        do {
+            try repository.update { try draft.create(in: &$0, includingArchived: model.showArchived) }
+            model.refresh()
+            dismiss()
+        } catch {
+            model.refresh()
+            saveError = error.localizedDescription
+        }
     }
 }
 

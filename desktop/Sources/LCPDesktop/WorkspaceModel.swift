@@ -106,29 +106,14 @@ final class WorkspaceModel: ObservableObject {
     }
     var selectedClass: ClassEnrollment? { state.classes.first { $0.id == selectedClassID } }
     var visibleClasses: [ClassEnrollment] {
-        state.classes.filter { showArchived || !$0.archived }.sorted {
-            let order = $0.shortLabel.localizedStandardCompare($1.shortLabel)
-            if order != .orderedSame { return order == .orderedAscending }
-            return $0.id.uuidString < $1.id.uuidString
-        }
+        state.sortedClasses(includingArchived: showArchived)
     }
     var activeClasses: [ClassEnrollment] {
-        state.classes.filter { !$0.archived }.sorted {
-            let order = $0.shortLabel.localizedStandardCompare($1.shortLabel)
-            if order != .orderedSame { return order == .orderedAscending }
-            return $0.id.uuidString < $1.id.uuidString
-        }
+        state.sortedClasses(includingArchived: false)
     }
 
     var visibleClassGroups: [WorkspaceClassGroup] {
-        let classesByTerm = Dictionary(grouping: visibleClasses, by: \.termID)
-        var groups = state.terms.filter { showArchived || !$0.archived }.map { term in
-            WorkspaceClassGroup(term: term, classes: classesByTerm[term.id] ?? [])
-        }
-        if let ungrouped = classesByTerm[nil] {
-            groups.append(WorkspaceClassGroup(term: nil, classes: ungrouped))
-        }
-        return groups
+        state.visibleClassGroups(includingArchived: showArchived)
     }
 
     private static let canvasSyncIntervalKey = "LCPDesktop.canvasSyncInterval"
@@ -1047,6 +1032,27 @@ final class WorkspaceModel: ObservableObject {
         }
         refresh(); selection = .classDetail(classes[0].id)
         notice = "Demo profile: fictional classes only. Your personal library and recorder are unchanged."
+    }
+}
+
+extension ContextState {
+    fileprivate func sortedClasses(includingArchived: Bool) -> [ClassEnrollment] {
+        classes.filter { includingArchived || !$0.archived }.sorted {
+            let order = $0.shortLabel.localizedStandardCompare($1.shortLabel)
+            if order != .orderedSame { return order == .orderedAscending }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+    }
+
+    func visibleClassGroups(includingArchived: Bool) -> [WorkspaceClassGroup] {
+        let classesByTerm = Dictionary(grouping: sortedClasses(includingArchived: includingArchived), by: \.termID)
+        var groups = terms.filter { includingArchived || !$0.archived }.map { term in
+            WorkspaceClassGroup(term: term, classes: classesByTerm[term.id] ?? [])
+        }
+        if let ungrouped = classesByTerm[nil] {
+            groups.append(WorkspaceClassGroup(term: nil, classes: ungrouped))
+        }
+        return groups
     }
 }
 
