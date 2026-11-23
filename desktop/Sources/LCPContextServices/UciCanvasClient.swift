@@ -208,13 +208,15 @@ public struct UciCanvasClient: Sendable {
         let web = Self.origin.appendingPathComponent(path)
         switch kind {
         case .assignments:
-            let a: Assignment = try await record(apiURL)
+            let a: Assignment = try await record(apiURL.appending(queryItems: [URLQueryItem(name: "include[]", value: "submission")]))
             guard String(a.id) == key, (a.course_id.map(String.init) ?? courseID) == courseID else { throw Self.changed }
             guard a.locked_for_user != true else { throw Self.locked }
             let due = a.due_at.map { "Due: \($0)" }
-            return try textDocument(title: a.name, subtitle: due, html: a.description, source: web.appendingPathComponent(key),
+            let status = a.submission?.state
+            let subtitle = [due, status.map { "Canvas submission: " + $0.rawValue }].compactMap { $0 }.joined(separator: "\n")
+            return try textDocument(title: a.name, subtitle: subtitle.isEmpty ? nil : subtitle, html: a.description, source: web.appendingPathComponent(key),
                                     remoteID: "\(courseID)/assignments/\(a.id)",
-                                    courseworkContext: ImportedCourseworkContext(title: a.name, dueAt: try Self.deadline(a.due_at)))
+                                    courseworkContext: ImportedCourseworkContext(title: a.name, dueAt: try Self.deadline(a.due_at), submissionState: status))
         case .quizzes:
             let quiz: Quiz = try await record(apiURL)
             guard String(quiz.id) == key, (quiz.course_id.map(String.init) ?? courseID) == courseID else { throw Self.changed }
@@ -223,7 +225,8 @@ public struct UciCanvasClient: Sendable {
             return try textDocument(title: quiz.title, subtitle: due, html: quiz.description,
                                     source: web.appendingPathComponent(key),
                                     remoteID: "\(courseID)/quizzes/\(quiz.id)",
-                                    courseworkContext: ImportedCourseworkContext(title: quiz.title, kind: "quiz", dueAt: try Self.deadline(quiz.due_at)))
+                                    courseworkContext: ImportedCourseworkContext(title: quiz.title, kind: "quiz", dueAt: try Self.deadline(quiz.due_at),
+                                                                                 assignmentID: quiz.assignment_id))
         case .pages:
             let page: WikiPage = try await record(apiURL)
             guard let slug = Self.validPageSlug(page.url), slug == resourceKey else { throw Self.changed }
@@ -487,9 +490,23 @@ public struct UciCanvasClient: Sendable {
         let name: String
         let description, due_at: String?
         let locked_for_user: Bool?
+        let submission: Submission?
+    }
+    private struct Submission: Decodable {
+        let workflow_state: String?
+        let excused, missing: Bool?
+
+        var state: CanvasSubmissionState? {
+            if excused == true { return .excused }
+            if workflow_state == "pending_review" || workflow_state == "submitted" { return .submitted }
+            // A recorded zero can be both graded and explicitly marked missing.
+            if missing == true { return .missing }
+            return workflow_state.flatMap(CanvasSubmissionState.init(rawValue:))
+        }
     }
     private struct Quiz: Decodable {
         let id: Int64
+        let assignment_id: Int64?
         let course_id: Int64?
         let title: String
         let description, due_at: String?

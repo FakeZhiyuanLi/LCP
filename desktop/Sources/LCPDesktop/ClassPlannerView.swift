@@ -10,8 +10,8 @@ struct ClassPlannerView: View {
     @State private var profiles: [AgentProviderProfile] = []
     @State private var selectedProfileID: UUID?
     @State private var selectedClassIDs: Set<UUID> = []
-    @State private var objective = "Help me plan what to do next for this class. Prioritize urgent coursework and the highest-value review."
-    @State private var context: ClassPlannerContext?
+    @State private var objective: String
+    @State private var coursework: [PlannerSource] = []
     private struct GeneratedPlan {
         let result: ClassPlanResult
         let objective: String
@@ -19,7 +19,6 @@ struct ClassPlannerView: View {
     }
     @State private var plan: GeneratedPlan?
     @State private var generating = false
-    @State private var loadingContext = false
     @State private var status: String?
     @State private var profileTask: Task<Void, Never>?
 
@@ -41,12 +40,14 @@ struct ClassPlannerView: View {
         self.model = model
         self.classID = classID
         self.globalScope = false
+        _objective = State(initialValue: ClassPlannerService.defaultObjective(acrossClasses: false))
     }
 
     init(model: WorkspaceModel, globalScope: Bool) {
         self.model = model
         self.classID = nil
         self.globalScope = globalScope
+        _objective = State(initialValue: ClassPlannerService.defaultObjective(acrossClasses: globalScope))
     }
 
     var body: some View {
@@ -62,19 +63,21 @@ struct ClassPlannerView: View {
                 selectedClassIDs = Set(activeClasses.map(\.id))
             }
             refreshProfiles()
+            refreshCoursework()
         }
         .onChange(of: model.rootURL) { _, _ in
             plan = nil
             refreshProfiles()
-            if context != nil { refreshContext() }
+            refreshCoursework()
         }
-        .onChange(of: selectedClassIDs) { _, _ in
-            guard globalScope, context != nil else { return }
-            refreshContext()
+        .onChange(of: activeClassIDs) { _, _ in
+            plan = nil
+            refreshCoursework()
         }
-        .onChange(of: model.state.revision) { _, _ in
-            guard context != nil else { return }
-            refreshContext()
+        .onChange(of: model.state.revision) { _, _ in refreshCoursework() }
+        .task(id: objective) {
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            refreshCoursework()
         }
         .onDisappear { profileTask?.cancel() }
     }
@@ -82,14 +85,14 @@ struct ClassPlannerView: View {
     private var plannerContent: some View {
         VStack(alignment: .leading, spacing: 18) {
             header
+            if globalScope { scopeCard.disabled(generating) }
             if profiles.isEmpty {
                 noProvider
             } else {
-                if globalScope { scopeCard }
                 requestCard
-                contextCard
                 if let plan { resultCard(plan) }
             }
+            contextCard
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -198,6 +201,7 @@ struct ClassPlannerView: View {
                 .accessibilityLabel("Agent provider")
             }
             TextEditor(text: $objective)
+                .disabled(generating)
                 .font(.body)
                 .scrollContentBackground(.hidden)
                 .padding(8)
@@ -225,29 +229,35 @@ struct ClassPlannerView: View {
     private var contextCard: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack {
-                Label("Context that will be used", systemImage: "doc.text.magnifyingglass")
+                Label("Coursework in focus", systemImage: "calendar")
                     .font(.headline)
                 Spacer()
-                if loadingContext { ProgressView().controlSize(.small) }
-                Button("Refresh") { refreshContext() }.disabled(loadingContext || generating)
+                Button("Refresh") {
+                    model.refreshIfChanged()
+                    refreshCoursework()
+                }.disabled(generating)
             }
-            if let context {
-                Text("\(context.sourceCount) source\(context.sourceCount == 1 ? "" : "s") across \(context.classLabels.joined(separator: ", ")) · library revision \(context.repositoryRevision)")
-                    .font(.callout)
-                Text("Includes current materials, class history, coursework, and available accepted lecture transcripts. Raw audio, credentials, and connection grants stay local.")
-                    .font(.caption)
-                    .foregroundStyle(WorkspacePalette.muted)
-                if !context.omissions.isEmpty {
-                    DisclosureGroup("\(context.omissions.count) context note(s)") {
-                        ForEach(Array(context.omissions.prefix(8).enumerated()), id: \.offset) { _, omission in
-                            Text(omission).font(.caption).foregroundStyle(WorkspacePalette.muted)
+            if !activeClassIDs.isEmpty {
+                if coursework.isEmpty {
+                    Text("No upcoming or outstanding coursework found here. You can still plan a review using your readings, notes, and lectures.")
+                        .font(.callout).foregroundStyle(WorkspacePalette.muted)
+                }
+                ForEach(coursework) { item in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(verbatim: item.classLabel + " · " + item.title).font(.callout.weight(.semibold))
+                            Text([item.timing, item.progress].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(WorkspacePalette.muted)
+                        }
+                        Spacer()
+                        if let citation = item.citation {
+                            Button("View source") { model.presentedCitation = citation }
+                                .accessibilityLabel("View source for \(item.title)")
                         }
                     }
                 }
             } else {
-                Text(activeClassIDs.isEmpty
-                     ? "Select at least one class to prepare a verified context snapshot."
-                     : "LCP prepares a verified snapshot when you refresh or generate a plan.")
+                Text("Select a class to see its upcoming coursework.")
                     .font(.callout)
                     .foregroundStyle(WorkspacePalette.muted)
             }
@@ -261,22 +271,28 @@ struct ClassPlannerView: View {
         let result = plan.result
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("Generated plan", systemImage: "checklist")
+                Label(result.isLocalReply ? "Plan from your library" : "Your study plan", systemImage: "checklist")
                     .font(.headline)
                 Spacer()
                 Button(globalScope ? "Save to Class Histories" : "Save to Class History") {
                     model.saveAgentPlan(classIDs: result.context.classIDs, objective: plan.objective,
-                                        plan: result.response.text, profile: plan.profile, context: result.context)
+                                        plan: result.response.text, profile: plan.profile, context: result.context, generatedLocally: result.isLocalReply)
                 }
                 .buttonStyle(.borderedProminent)
             }
             AgentOutputView(source: result.response.text)
-            DisclosureGroup("Sources supplied to the agent · \(result.context.sourceCitations.count)") {
+            DisclosureGroup("Sources for this plan · \(result.context.sourceCitations.count)") {
                 ForEach(result.context.sourceCitations) { citation in
-                    Text(citation.label.isEmpty ? citation.sourceKind.capitalized : citation.label)
-                        .font(.caption)
-                        .foregroundStyle(WorkspacePalette.muted)
-                        .textSelection(.enabled)
+                    Button(citation.label.isEmpty ? citation.sourceKind.capitalized : citation.label) {
+                        model.presentedCitation = citation
+                    }.buttonStyle(.link).font(.caption)
+                }
+            }
+            if !result.context.omissions.isEmpty {
+                DisclosureGroup("Unavailable sources · \(result.context.omissions.count)") {
+                    ForEach(Array(result.context.omissions.enumerated()), id: \.offset) { _, note in
+                        Text(note).font(.caption).foregroundStyle(WorkspacePalette.muted)
+                    }
                 }
             }
             Text("Review the answer before saving. Saving creates an attributed, citation-backed history entry and does not edit Canvas or other university services.")
@@ -306,20 +322,9 @@ struct ClassPlannerView: View {
         }
     }
 
-    private func refreshContext(classIDs: [UUID]? = nil) {
-        guard let repository = model.repository else { return }
-        let requestedIDs = classIDs ?? activeClassIDs
-        guard !requestedIDs.isEmpty else {
-            context = nil
-            loadingContext = false
-            return
-        }
-        loadingContext = true
-        status = nil
-        do {
-            context = try ClassPlannerService(repository: repository).makeContext(classIDs: requestedIDs)
-        } catch { status = error.localizedDescription }
-        loadingContext = false
+    private func refreshCoursework() {
+        guard let repository = model.repository else { coursework = []; return }
+        coursework = ClassPlannerService(repository: repository).courseworkPreview(classIDs: activeClassIDs, objective: objective)
     }
 
     private func generate() {
@@ -339,8 +344,7 @@ struct ClassPlannerView: View {
                 let key = try await credentials.apiKeyAsync(for: profile)
                 let result = try await ClassPlannerService(repository: repository).generate(
                     classIDs: requestedClassIDs, objective: request, profile: profile, apiKey: key)
-                guard model.repository === repository else { return }
-                context = result.context
+                guard model.repository === repository, activeClassIDs == requestedClassIDs else { return }
                 plan = GeneratedPlan(result: result, objective: request, profile: profile)
             } catch is CancellationError {
                 status = "The planning request was cancelled."

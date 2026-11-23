@@ -230,9 +230,19 @@ public struct ImportedCourseworkContext: Codable, Equatable, Sendable {
     public let title: String
     public let kind: String
     public let dueAt: Date?
-    public init(title: String, kind: String = "assignment", dueAt: Date? = nil) {
+    /// Canvas quizzes can have a second listing under their parent assignment.
+    public let assignmentID: Int64?
+    public let submissionState: CanvasSubmissionState?
+    public init(title: String, kind: String = "assignment", dueAt: Date? = nil,
+                assignmentID: Int64? = nil, submissionState: CanvasSubmissionState? = nil) {
         self.title = title; self.kind = kind; self.dueAt = dueAt
+        self.assignmentID = assignmentID
+        self.submissionState = submissionState
     }
+}
+
+public enum CanvasSubmissionState: String, Codable, Sendable {
+    case unsubmitted, submitted, graded, excused, missing
 }
 
 public struct ActivityEntry: Codable, Equatable, Identifiable, Sendable {

@@ -34,7 +34,9 @@ private final class CanvasFixtureProtocol: URLProtocol {
         case "/api/v1/courses/46/assignments":
             send(#"[{"id":11,"name":"Project One","due_at":"2026-11-23T12:00:00Z"}]"#)
         case "/api/v1/courses/46/assignments/11":
-            send(#"{"id":11,"course_id":46,"name":"Project One","due_at":"2026-11-23T12:00:00Z","description":"<p>Describe A &amp; B.</p><p>Next line.<img alt='Square'></p><script>private script</script>"}"#)
+            let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertTrue(query.contains(URLQueryItem(name: "include[]", value: "submission")))
+            send(#"{"id":11,"course_id":46,"name":"Project One","due_at":"2026-11-23T12:00:00Z","description":"<p>Describe A &amp; B.</p><p>Next line.<img alt='Square'></p><script>private script</script>","submission":{"workflow_state":"pending_review"}}"#)
         case "/api/v1/courses/46/assignments/99":
             send(#"{"id":99,"course_id":88,"name":"Unrelated"}"#)
         case "/api/v1/courses/46/assignments/12":
@@ -49,7 +51,7 @@ private final class CanvasFixtureProtocol: URLProtocol {
             if let status = Self.quizListStatus { return send("[]", status: status) }
             send(#"[{"id":12,"course_id":46,"title":"Quiz Seven","due_at":"2026-11-24T12:00:00Z","published":true},{"id":13,"course_id":46,"title":"Hidden quiz","published":false}]"#)
         case "/api/v1/courses/46/quizzes/12":
-            send(#"{"id":12,"course_id":46,"title":"Quiz Seven","due_at":"2026-11-24T12:00:00Z","description":"<p>Explain the table.</p>","published":true}"#)
+            send(#"{"id":12,"course_id":46,"assignment_id":72,"title":"Quiz Seven","due_at":"2026-11-24T12:00:00Z","description":"<p>Explain the table.</p>","published":true}"#)
         case "/api/v1/courses/46/quizzes/99":
             send(#"{"id":99,"course_id":88,"title":"Wrong course"}"#)
         case "/api/v1/courses/46/pages":
@@ -179,6 +181,7 @@ final class UciCanvasClientTests: XCTestCase {
         XCTAssertTrue(body.contains("Next line.Square"))
         XCTAssertFalse(body.contains("private script"))
         XCTAssertEqual(doc.courseworkContext?.title, "Project One")
+        XCTAssertEqual(doc.courseworkContext?.submissionState, .submitted)
         XCTAssertEqual(doc.courseworkContext?.dueAt, ISO8601DateFormatter().date(from: "2026-11-23T12:00:00Z"))
         let pages = try await canvas.items(courseID: "46", kind: .pages)
         XCTAssertEqual(pages.items.map(\.id), ["92"])
@@ -204,6 +207,7 @@ final class UciCanvasClientTests: XCTestCase {
             item: .init(id: "12", title: "Untrusted listing title", detail: ""))
         XCTAssertEqual(noDeadline.courseworkContext?.title, "No deadline", "Use refreshed detail facts, not the older list row")
         XCTAssertNil(noDeadline.courseworkContext?.dueAt)
+        XCTAssertNil(noDeadline.courseworkContext?.submissionState)
         let fractional = try await canvas.document(courseID: "46", kind: .assignments,
             item: .init(id: "13", title: "Assignment", detail: ""))
         let expected = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-23T12:00:00Z"))
@@ -247,6 +251,7 @@ final class UciCanvasClientTests: XCTestCase {
         let doc = try await canvas.document(courseID: "46", kind: .quizzes, item: quiz)
         XCTAssertEqual(doc.remoteID, "46/quizzes/12")
         XCTAssertEqual(doc.courseworkContext?.kind, "quiz")
+        XCTAssertEqual(doc.courseworkContext?.assignmentID, 72)
         XCTAssertEqual(doc.sourceURL.path, "/courses/46/quizzes/12")
         XCTAssertTrue(String(decoding: doc.data, as: UTF8.self).contains("Explain the table."))
         do {

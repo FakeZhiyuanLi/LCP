@@ -233,7 +233,12 @@ public final class RetrievalService {
                    grantID: nil, rankForChat: true)
     }
 
-    private func search(_ query: ContextQuery, grantID: UUID?, rankForChat: Bool) throws -> ContextSearchPage {
+    func studyPassages(classIDs: [UUID], terms: [String]) throws -> ContextSearchPage {
+        try search(ContextQuery(classIDs: classIDs, text: terms.joined(separator: " "), limit: 16),
+                   grantID: nil, rankForChat: true, studyOnly: true)
+    }
+
+    private func search(_ query: ContextQuery, grantID: UUID?, rankForChat: Bool, studyOnly: Bool = false) throws -> ContextSearchPage {
         guard !query.classIDs.isEmpty, query.classIDs.count <= 128, Set(query.classIDs).count == query.classIDs.count,
               query.text.utf8.count <= 4_096, (1...100).contains(query.limit), (0...100_000).contains(query.offset),
               query.materialIDs == nil || query.materialIDs!.count <= 1_000,
@@ -292,6 +297,7 @@ public final class RetrievalService {
             guard let revision = repository.state.materialRevisions.first(where: { $0.id == material.currentRevisionID }) else {
                 omissions.append("Material \(material.id.uuidString): current revision unavailable."); continue
             }
+            if studyOnly && revision.courseworkContext != nil { continue }
             let hasSearchableContent = revision.extractionState == "ready" || revision.extractionState.hasSuffix("_attachment_details_only")
             guard hasSearchableContent, let textPayload = revision.text else {
                 omissions.append("Material \(material.id.uuidString): extraction \(revision.extractionState); original retained."); continue
@@ -310,6 +316,7 @@ public final class RetrievalService {
         if query.materialIDs == nil && grant?.allowedMaterialIDs == nil {
             let supersededIDs = Set(repository.state.activities.compactMap(\.supersedesID))
             for entry in repository.state.activities where query.classIDs.contains(entry.classID) && !supersededIDs.contains(entry.id) && matchesTime(entry.eventAt) {
+                if studyOnly && entry.kind == "agent_plan" { continue }
                 guard let revision = repository.state.activityRevisions.first(where: { $0.id == entry.revisionID }) else { continue }
                 do {
                     let data = try repository.payloadData(revision.content)
@@ -745,7 +752,7 @@ public final class RetrievalService {
         return substring
     }
 
-    static func prefixUTF8(_ text: String, bytes limit: Int) -> String {
+    nonisolated static func prefixUTF8(_ text: String, bytes limit: Int) -> String {
         guard text.utf8.count > limit else { return text }
         var bytes = Array(text.utf8.prefix(limit))
         while let last = bytes.last {

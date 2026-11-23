@@ -258,11 +258,12 @@ public struct OpenAICompatibleAgentClient: Sendable {
         }
     }
 
-    public func generate(prompt: String, maxOutputTokens: Int = 1_200, files: [ChatFileInput] = []) async throws -> AgentProviderGenerationResult {
+    public func generate(prompt: String, maxOutputTokens: Int = 1_200, files: [ChatFileInput] = [],
+                         displayTools: Bool = true) async throws -> AgentProviderGenerationResult {
         let diagnostics = AgentRequestDiagnostics()
         return try await diagnostics.run(.generate) {
             let (endpoint, host) = try destination()
-            let object = try await withGenerationBody(prompt: prompt, maximum: maxOutputTokens, stream: false, files: files) { body, tools in
+            let object = try await withGenerationBody(prompt: prompt, maximum: maxOutputTokens, stream: false, files: files, displayTools: displayTools) { body, tools in
                 try await jsonResponse(endpoint: endpoint, host: host, body: body, diagnostics: diagnostics, displayTools: tools)
             }
             try Self.checkStatus(object)
@@ -318,10 +319,11 @@ public struct OpenAICompatibleAgentClient: Sendable {
         }
     }
 
-    private func withGenerationBody<T>(prompt: String, maximum: Int, stream: Bool, files: [ChatFileInput],
+    private func withGenerationBody<T>(prompt: String, maximum: Int, stream: Bool, files: [ChatFileInput], displayTools: Bool = true,
                                        send: (Data, Bool) async throws -> T) async throws -> T {
         let body = try Self.generationBody(model: profile.model, prompt: prompt, maxOutputTokens: maximum,
-                                           stream: stream, displayTools: true, files: files)
+                                           stream: stream, displayTools: displayTools, files: files)
+        guard displayTools else { return try await send(body, false) }
         do { return try await send(body, true) }
         catch is UnsupportedDisplayTools {
             // Some compatible gateways reject function declarations before beginning a response.

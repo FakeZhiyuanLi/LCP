@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import XCTest
 import LCPContextCore
-import LCPContextServices
+@testable import LCPContextServices
 @testable import LCPDesktop
 
 final class AgentOutputTests: XCTestCase {
@@ -76,5 +76,36 @@ final class AgentOutputTests: XCTestCase {
         guard case .table(let rows) = blocks.first else { return XCTFail("Missing table") }
         XCTAssertEqual(rows.map { $0.map { String($0.characters) } }, [["Task", "Minutes"], ["Lab", "30"]])
         XCTAssertEqual(blocks.last, .code("{\"version\":9}"))
+    }
+
+    @MainActor
+    func testLocalPlanOpensItsExactSourceAndSavesWithLocalAttribution() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = WorkspaceModel(arguments: ["--profile-root", root.path])
+        let repository = try XCTUnwrap(model.repository)
+        let course = ClassEnrollment(title: "Fictional Logic")
+        try repository.update { $0.classes.append(course) }
+        let url = URL(string: "https://canvas.eee.uci.edu/courses/70/assignments/1")!
+        let title = "Proof [draft]"
+        let source = UniversityDocument(filename: "Proof.txt", data: Data("\(title)\n\(url.absoluteString)\n\nProve the converse.".utf8),
+            sourceURL: url, courseworkContext: .init(title: title, dueAt: .now.addingTimeInterval(86_400)))
+        _ = try MaterialService(repository: repository).importUniversityDocument(source, classID: course.id, provider: "uci-canvas",
+            remoteID: "70/assignments/1", title: title)
+        model.refresh()
+        let context = try ClassPlannerService(repository: repository).makeContext(classIDs: [course.id])
+        let body = StudyPlanResponse.localPlan(context.planningSources)
+        let blocks = AgentOutputBlock.parse(body)
+        guard case let .text(header, 3, _, _, _) = blocks.first else { return XCTFail("Expected a linked priority heading") }
+        XCTAssertTrue(String(header.characters).contains(title))
+        let link = try XCTUnwrap(header.runs.compactMap(\.link).first)
+        let citation = try CitationLink.decode(link)
+        XCTAssertEqual(citation, try XCTUnwrap(context.sourceCitations.first))
+        XCTAssertTrue(try RetrievalService(repository: repository).resolve(citation).text.contains("Prove the converse."))
+        let profile = AgentProviderProfile(name: "Fictional provider", baseURL: "https://example.invalid", model: "fixture")
+        model.saveAgentPlan(classIDs: [course.id], objective: "Plan my week", plan: body, profile: profile, context: context, generatedLocally: true)
+        let saved = try XCTUnwrap(repository.state.activities.first)
+        XCTAssertEqual(saved.agentIdentity, "LCP study planner")
+        XCTAssertEqual(saved.inputContextManifest, [citation])
     }
 }

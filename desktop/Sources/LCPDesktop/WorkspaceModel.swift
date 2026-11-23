@@ -777,7 +777,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func saveAgentPlan(classIDs: [UUID], objective: String, plan: String, profile: AgentProviderProfile,
-                       context: ClassPlannerContext) {
+                       context: ClassPlannerContext, generatedLocally: Bool = false) {
         guard !classIDs.isEmpty, classIDs.count <= 32, Set(classIDs).count == classIDs.count,
               context.classIDs == classIDs,
               classIDs.allSatisfy({ id in state.classes.contains(where: { $0.id == id }) }) else {
@@ -818,7 +818,7 @@ final class WorkspaceModel: ObservableObject {
                 let title = "Agent plan · \(entry.label) · \(timestamp.formatted(date: .abbreviated, time: .shortened))"
                 state.activities.append(ActivityEntry(classID: entry.classID, kind: "agent_plan", title: title,
                                                       body: historyBody, citations: entry.citations,
-                                                      agentIdentity: profile.name,
+                                                      agentIdentity: generatedLocally ? "LCP study planner" : profile.name,
                                                       inputContextManifest: entry.citations))
             }
         }

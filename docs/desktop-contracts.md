@@ -39,12 +39,19 @@ entries, outside `ContextState`, portable backups, context snapshots, and MCP
 configuration exports. The OpenAI-compatible Responses check sends a bounded
 test prompt without class context. A future subscription transport can reuse the
 provider abstraction without moving personal keys into academic state.
-The class planner builds a fresh bounded snapshot through `RetrievalService`,
-quotes source text as untrusted study data, and sends it only after the student
-chooses an enabled provider and enters a planning request. A generated answer
-stays in the planner until review. Saving it creates an attributed `agent_plan`
-activity with source-level citations and an input-context manifest. The planner
-does not write university services or official class records.
+The Study Planner ranks synced Canvas assignments and quizzes alongside tracked
+coursework, including items the student has yet to add to Coursework. It pairs
+quiz and assignment listings using Canvas’s parent ID, or an unambiguous title
+and deadline within the same course for older imports. Local progress and
+Canvas submission state retain their provenance. Older snapshots can have
+unknown submission status.
+
+After the student chooses a provider and generates a plan, LCP sends at most
+32 KiB of class evidence, including deadlines, instructions and verified study
+passages. The provider returns actions and completion criteria keyed to those
+sources. LCP supplies the titles, deadlines and citation links. If an answer
+has no usable steps, LCP builds a local plan from the same evidence. Saving
+creates an attributed history entry with the exact input citations.
 
 ## Agent presentation
 
