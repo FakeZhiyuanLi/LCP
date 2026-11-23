@@ -489,6 +489,21 @@ public enum ChatMessageRole: String, Codable, Equatable, Sendable {
     case assistant
 }
 
+/// Provider-reported token counts for one generation. Providers may omit one
+/// or more fields, so every count remains optional. This lives in the core
+/// module because chat history persists it alongside the message.
+public struct TokenUsage: Codable, Equatable, Sendable {
+    public let inputTokens: Int?
+    public let outputTokens: Int?
+    public let totalTokens: Int?
+
+    public init(inputTokens: Int? = nil, outputTokens: Int? = nil, totalTokens: Int? = nil) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.totalTokens = totalTokens
+    }
+}
+
 /// One persisted turn in a class or university-wide study conversation.
 /// Assistant citations retain the exact immutable revisions supplied for that turn.
 public struct ChatMessage: Codable, Equatable, Identifiable, Sendable {
@@ -500,10 +515,12 @@ public struct ChatMessage: Codable, Equatable, Identifiable, Sendable {
     public var citations: [SourceCitation]
     public var contextClassIDs: [UUID]
     public var contextRevision: UInt64?
+    public var usage: TokenUsage?
 
     public init(id: UUID = UUID(), role: ChatMessageRole, content: String, createdAt: Date = Date(),
                 agentIdentity: String? = nil, citations: [SourceCitation] = [],
-                contextClassIDs: [UUID] = [], contextRevision: UInt64? = nil) {
+                contextClassIDs: [UUID] = [], contextRevision: UInt64? = nil,
+                usage: TokenUsage? = nil) {
         self.id = id
         self.role = role
         self.content = content
@@ -512,6 +529,7 @@ public struct ChatMessage: Codable, Equatable, Identifiable, Sendable {
         self.citations = citations
         self.contextClassIDs = contextClassIDs
         self.contextRevision = contextRevision
+        self.usage = usage
     }
 }
 

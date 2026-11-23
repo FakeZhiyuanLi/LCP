@@ -97,6 +97,27 @@ public struct UniversityHTTP: Sendable {
         return try await send(request, bearer: bearer, allowedHosts: [host], limit: 65_536).0
     }
 
+    func postJSONStream(_ url: URL, body: Data, bearer: String, host: String,
+                        limit: Int) throws -> AsyncThrowingStream<Data, Error> {
+        guard limit > 0, Self.allows(url, hosts: [host]), !bearer.isEmpty,
+              bearer.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil else {
+            throw UniversityServiceError.message("The service credential or destination is invalid.")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization")
+        request.httpBody = body
+        let configuration = self.configuration
+        return AsyncThrowingStream { continuation in
+            let operation = UniversityStreamingRequest(configuration: configuration, request: request,
+                                                        allowedHosts: [host], limit: limit, continuation: continuation)
+            continuation.onTermination = { @Sendable _ in operation.cancel() }
+            operation.start()
+        }
+    }
+
     private func send(_ input: URLRequest, bearer: String?, allowedHosts: Set<String>,
                       limit: Int) async throws -> (Data, HTTPURLResponse) {
         try Task.checkCancellation()
@@ -200,5 +221,94 @@ final class UniversityResponse: NSObject, URLSessionDataDelegate, @unchecked Sen
         } else {
             result.finish(throwing: UniversityServiceError.message("The service returned an incomplete response."))
         }
+    }
+}
+
+/// Streams bounded POST response chunks without buffering provider output.
+final class UniversityStreamingRequest: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let configuration: URLSessionConfiguration
+    private let request: URLRequest
+    private let allowedHosts: Set<String>
+    private let limit: Int
+    private let continuation: AsyncThrowingStream<Data, Error>.Continuation
+    private var session: URLSession?
+    private var task: URLSessionDataTask?
+    private var received = 0
+    private var finished = false
+
+    init(configuration: URLSessionConfiguration, request: URLRequest, allowedHosts: Set<String>, limit: Int,
+         continuation: AsyncThrowingStream<Data, Error>.Continuation) {
+        self.configuration = configuration
+        self.request = request
+        self.allowedHosts = allowedHosts
+        self.limit = limit
+        self.continuation = continuation
+    }
+
+    func start() {
+        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        self.session = session
+        let task = session.dataTask(with: request)
+        self.task = task
+        task.resume()
+    }
+
+    func cancel() {
+        task?.cancel()
+        session?.invalidateAndCancel()
+        finish()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        finish(throwing: UniversityServiceError.message("The service redirected a streaming request. Try again."))
+        completionHandler(nil)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let http = response as? HTTPURLResponse, let url = http.url,
+              UniversityHTTP.allows(url, hosts: allowedHosts) else {
+            finish(throwing: UniversityServiceError.message("The service returned an invalid response."))
+            completionHandler(.cancel)
+            return
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            finish(throwing: UniversityServiceError.http(http.statusCode))
+            completionHandler(.cancel)
+            return
+        }
+        guard http.expectedContentLength < 0 || http.expectedContentLength <= Int64(limit) else {
+            finish(throwing: UniversityServiceError.message("The provider response exceeds the output limit."))
+            completionHandler(.cancel)
+            return
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
+        guard received <= limit - chunk.count else {
+            finish(throwing: UniversityServiceError.message("The provider response exceeds the output limit."))
+            dataTask.cancel()
+            return
+        }
+        received += chunk.count
+        continuation.yield(chunk)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error, (error as NSError).code != NSURLErrorCancelled {
+            finish(throwing: UniversityServiceError.message("Could not reach the provider. Check the network and try again."))
+        } else {
+            finish()
+        }
+        session.finishTasksAndInvalidate()
+    }
+
+    private func finish(throwing error: Error? = nil) {
+        guard !finished else { return }
+        finished = true
+        if let error { continuation.finish(throwing: error) }
+        else { continuation.finish() }
     }
 }

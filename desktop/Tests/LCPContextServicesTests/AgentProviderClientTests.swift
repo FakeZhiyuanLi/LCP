@@ -1,10 +1,12 @@
 import Foundation
 import XCTest
+import LCPContextCore
 @testable import LCPContextServices
 
 final class AgentProviderFixtureProtocol: URLProtocol {
     static var status = 200
     static var response: [String: Any] = ["id": "resp_fixture"]
+    static var streamBody: Data?
     static var requestBody: [String: Any] = [:]
     static var authorization: String?
 
@@ -17,12 +19,23 @@ final class AgentProviderFixtureProtocol: URLProtocol {
            let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
             Self.requestBody = object
         }
+        let isStream = (Self.requestBody["stream"] as? Bool) == true
         let response = HTTPURLResponse(url: request.url!, statusCode: Self.status,
-                                       httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+                                       httpVersion: "HTTP/1.1", headerFields: ["Content-Type": isStream ? "text/event-stream" : "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         if Self.status < 300 {
-            let body = (try? JSONSerialization.data(withJSONObject: Self.response)) ?? Data()
-            client?.urlProtocol(self, didLoad: body)
+            if isStream, let streamBody = Self.streamBody {
+                let split = max(1, streamBody.count / 3)
+                var start = 0
+                while start < streamBody.count {
+                    let end = min(streamBody.count, start + split)
+                    client?.urlProtocol(self, didLoad: streamBody.subdata(in: start..<end))
+                    start = end
+                }
+            } else {
+                let body = (try? JSONSerialization.data(withJSONObject: Self.response)) ?? Data()
+                client?.urlProtocol(self, didLoad: body)
+            }
         }
         client?.urlProtocolDidFinishLoading(self)
     }
@@ -56,6 +69,7 @@ final class AgentProviderClientTests: XCTestCase {
         super.setUp()
         AgentProviderFixtureProtocol.status = 200
         AgentProviderFixtureProtocol.response = ["id": "resp_fixture"]
+        AgentProviderFixtureProtocol.streamBody = nil
         AgentProviderFixtureProtocol.requestBody = [:]
         AgentProviderFixtureProtocol.authorization = nil
     }
@@ -111,5 +125,48 @@ final class AgentProviderClientTests: XCTestCase {
         } catch let error as AgentProviderError {
             XCTAssertEqual(error, .inputTooLarge)
         }
+    }
+
+    func testStreamingGenerationSendsStreamFlagAndReportsDeltasAndUsage() async throws {
+        AgentProviderFixtureProtocol.streamBody = Data(#"""
+data: {"type":"response.created","response":{"id":"resp_stream"}}
+
+data: {"type":"response.output_text.delta","delta":"Hello "}
+
+data: {"type":"response.output_text.delta","delta":"streaming world"}
+
+data: {"type":"response.completed","response":{"id":"resp_stream","usage":{"input_tokens":24,"output_tokens":6,"total_tokens":30}}}
+
+data: [DONE]
+"""#.utf8)
+        let collector = StreamUpdateCollector()
+        let result = try await client().generateStream(prompt: "streamed prompt", maxOutputTokens: 64) { update in
+            collector.append(update)
+        }
+
+        XCTAssertEqual(result.text, "Hello streaming world")
+        XCTAssertEqual(result.requestID, "resp_stream")
+        XCTAssertEqual(result.usage, TokenUsage(inputTokens: 24, outputTokens: 6, totalTokens: 30))
+        XCTAssertEqual(AgentProviderFixtureProtocol.requestBody["stream"] as? Bool, true)
+        XCTAssertGreaterThanOrEqual(collector.values.filter { !$0.delta.isEmpty }.count, 2)
+        XCTAssertTrue(collector.values.last?.finished == true)
+        XCTAssertEqual(collector.values.last?.usage, result.usage)
+    }
+}
+
+private final class StreamUpdateCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [AgentProviderStreamUpdate] = []
+
+    func append(_ update: AgentProviderStreamUpdate) {
+        lock.lock()
+        storage.append(update)
+        lock.unlock()
+    }
+
+    var values: [AgentProviderStreamUpdate] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
     }
 }

@@ -850,7 +850,8 @@ public final class ContextRepository {
                       Set(message.contextClassIDs).count == message.contextClassIDs.count,
                       message.contextClassIDs.allSatisfy(classIDs.contains),
                       thread.classID.map({ message.contextClassIDs == [$0] }) ?? true,
-                      message.citations.allSatisfy({ message.contextClassIDs.contains($0.classID) }) else {
+                      message.citations.allSatisfy({ message.contextClassIDs.contains($0.classID) }),
+                      message.usage.map(Self.validChatUsage) ?? true else {
                     throw ContextRepositoryError.invalidState("chat message is invalid or out of scope")
                 }
                 if let agent = message.agentIdentity {
@@ -870,6 +871,11 @@ public final class ContextRepository {
             }
             if requirePayloadBytes { _ = try payload(reference) }
         }
+    }
+
+    nonisolated private static func validChatUsage(_ usage: TokenUsage) -> Bool {
+        [usage.inputTokens, usage.outputTokens, usage.totalTokens].compactMap { $0 }
+            .allSatisfy { (0...100_000_000).contains($0) }
     }
 
     nonisolated private static func validateDate(_ value: LocalDate) throws {

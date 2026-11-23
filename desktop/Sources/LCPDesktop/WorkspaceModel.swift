@@ -653,7 +653,7 @@ final class WorkspaceModel: ObservableObject {
 
     @discardableResult
     func saveChatTurn(classID: UUID?, message: String, response: String, profile: AgentProviderProfile,
-                      context: ClassPlannerContext) -> Bool {
+                      context: ClassPlannerContext, usage: TokenUsage? = nil) -> Bool {
         let request = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let reply = response.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedIDs = Set(context.classIDs)
@@ -667,7 +667,8 @@ final class WorkspaceModel: ObservableObject {
               Set(context.classIDs).count == context.classIDs.count,
               context.classIDs.allSatisfy({ id in state.classes.contains(where: { $0.id == id }) }),
               context.sourceCitations.allSatisfy({ selectedIDs.contains($0.classID) }),
-              context.sourceCitations.count <= 128 else {
+              context.sourceCitations.count <= 128,
+              usage.map({ [$0.inputTokens, $0.outputTokens, $0.totalTokens].compactMap { $0 }.allSatisfy { (0...100_000_000).contains($0) } }) ?? true else {
             errorMessage = "The chat context is stale or invalid. Refresh it and try again."
             return false
         }
@@ -677,7 +678,8 @@ final class WorkspaceModel: ObservableObject {
                                contextClassIDs: context.classIDs, contextRevision: context.repositoryRevision)
         let assistant = ChatMessage(role: .assistant, content: reply, createdAt: now,
                                     agentIdentity: profile.name, citations: citations,
-                                    contextClassIDs: context.classIDs, contextRevision: context.repositoryRevision)
+                                    contextClassIDs: context.classIDs, contextRevision: context.repositoryRevision,
+                                    usage: usage)
         var saved = false
         mutate { state in
             var threads = state.chatThreads ?? []

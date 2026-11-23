@@ -74,7 +74,8 @@ final class ContextRepositoryTests: XCTestCase {
         let second = try seedClass(repository, name: "Fictional winter")
         let classMessage = ChatMessage(role: .user, content: "How should I review this class?", contextClassIDs: [first.id], contextRevision: 1)
         let universityMessage = ChatMessage(role: .assistant, content: "Balance both fictional classes.", agentIdentity: "Synthetic agent",
-                                             contextClassIDs: [first.id, second.id], contextRevision: 1)
+                                             contextClassIDs: [first.id, second.id], contextRevision: 1,
+                                             usage: TokenUsage(inputTokens: 120, outputTokens: 48, totalTokens: 168))
         try repository.update {
             $0.chatThreads = [
                 ChatThread(classID: first.id, title: first.shortLabel, messages: [classMessage]),
@@ -86,6 +87,8 @@ final class ContextRepositoryTests: XCTestCase {
         XCTAssertEqual(reopened.state.chatThreads?.count, 2)
         XCTAssertEqual(reopened.state.chatThreads?.first?.messages, [classMessage])
         XCTAssertNil(reopened.state.chatThreads?.last?.classID)
+        XCTAssertEqual(reopened.state.chatThreads?.last?.messages.first?.usage,
+                       TokenUsage(inputTokens: 120, outputTokens: 48, totalTokens: 168))
 
         let backup = root.appendingPathComponent("backup")
         try reopened.exportBackup(to: backup)

@@ -1,4 +1,9 @@
 import Foundation
+import LCPContextCore
+
+/// Compatibility name for provider-facing APIs. Persisted chat records use
+/// the core `TokenUsage` type so the storage module stays independent.
+public typealias AgentProviderUsage = TokenUsage
 
 /// Metadata for a user-owned provider connection. The API key is deliberately
 /// kept outside this value so it cannot enter library state, backups, or agent
@@ -84,10 +89,30 @@ public struct AgentProviderCheckResult: Equatable, Sendable {
 public struct AgentProviderGenerationResult: Equatable, Sendable {
     public let text: String
     public let requestID: String?
+    public let usage: TokenUsage?
 
-    public init(text: String, requestID: String? = nil) {
+    public init(text: String, requestID: String? = nil, usage: TokenUsage? = nil) {
         self.text = text
         self.requestID = requestID
+        self.usage = usage
+    }
+}
+
+/// Incremental output from a Responses API stream.
+public struct AgentProviderStreamUpdate: Sendable {
+    public let delta: String
+    public let text: String
+    public let requestID: String?
+    public let usage: TokenUsage?
+    public let finished: Bool
+
+    public init(delta: String = "", text: String, requestID: String? = nil,
+                usage: TokenUsage? = nil, finished: Bool = false) {
+        self.delta = delta
+        self.text = text
+        self.requestID = requestID
+        self.usage = usage
+        self.finished = finished
     }
 }
 
@@ -186,7 +211,46 @@ public struct OpenAICompatibleAgentClient: Sendable {
                   let text = Self.responseText(from: object), !text.isEmpty else {
                 throw AgentProviderError.invalidResponse
             }
-            return AgentProviderGenerationResult(text: text, requestID: object["id"] as? String)
+            return AgentProviderGenerationResult(text: text, requestID: object["id"] as? String,
+                                                 usage: Self.usage(from: object["usage"] as? [String: Any]))
+        } catch let error as AgentProviderError {
+            throw error
+        } catch let error as UniversityServiceError {
+            switch error {
+            case .http(let status): throw AgentProviderError.http(status)
+            case .message: throw AgentProviderError.requestFailed
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw AgentProviderError.requestFailed
+        }
+    }
+
+    /// Generate a bounded answer while forwarding text deltas as they arrive.
+    /// The callback receives only provider output and sanitized usage metadata.
+    public func generateStream(prompt: String, maxOutputTokens: Int = 1_200,
+                               onUpdate: @escaping @Sendable (AgentProviderStreamUpdate) -> Void) async throws -> AgentProviderGenerationResult {
+        guard profile.providerKind == "openai-compatible" else { throw AgentProviderError.unsupportedProvider }
+        guard (1...4_096).contains(maxOutputTokens), prompt.utf8.count <= 3_000_000 else {
+            throw AgentProviderError.inputTooLarge
+        }
+        let base = try AgentProviderProfile.validateBaseURL(profile.baseURL)
+        guard let host = base.host?.lowercased() else { throw AgentProviderError.invalidConfiguration }
+        let endpoint = base.appendingPathComponent("responses")
+        let body = try Self.generationBody(model: profile.model, prompt: prompt,
+                                           maxOutputTokens: maxOutputTokens, stream: true)
+        do {
+            let chunks = try http.postJSONStream(endpoint, body: body, bearer: apiKey, host: host,
+                                                 limit: 3_500_000)
+            var parser = StreamParser(onUpdate: onUpdate)
+            for try await chunk in chunks {
+                try Task.checkCancellation()
+                try parser.consume(chunk)
+            }
+            let result = try parser.finish()
+            guard !result.text.isEmpty else { throw AgentProviderError.invalidResponse }
+            return result
         } catch let error as AgentProviderError {
             throw error
         } catch let error as UniversityServiceError {
@@ -213,11 +277,16 @@ public struct OpenAICompatibleAgentClient: Sendable {
     }
 
     static func generationBody(model: String, prompt: String, maxOutputTokens: Int) throws -> Data {
+        try generationBody(model: model, prompt: prompt, maxOutputTokens: maxOutputTokens, stream: false)
+    }
+
+    private static func generationBody(model: String, prompt: String, maxOutputTokens: Int, stream: Bool) throws -> Data {
         let payload: [String: Any] = [
             "model": model,
             "input": prompt,
             "max_output_tokens": maxOutputTokens,
-            "store": false
+            "store": false,
+            "stream": stream
         ]
         guard JSONSerialization.isValidJSONObject(payload) else { throw AgentProviderError.invalidConfiguration }
         let data = try JSONSerialization.data(withJSONObject: payload, options: [])
@@ -239,5 +308,105 @@ public struct OpenAICompatibleAgentClient: Sendable {
         }
         let result = fragments.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return result.isEmpty ? nil : result
+    }
+
+    private static func usage(from object: [String: Any]?) -> TokenUsage? {
+        guard let object else { return nil }
+        func count(_ key: String) -> Int? {
+            guard let value = object[key] as? NSNumber else { return nil }
+            let count = value.intValue
+            return (0...100_000_000).contains(count) ? count : nil
+        }
+        let usage = TokenUsage(inputTokens: count("input_tokens"),
+                                       outputTokens: count("output_tokens"),
+                                       totalTokens: count("total_tokens"))
+        return usage.inputTokens == nil && usage.outputTokens == nil && usage.totalTokens == nil ? nil : usage
+    }
+
+    private struct StreamParser {
+        private var bytes = Data()
+        private var eventData: [String] = []
+        private var text = ""
+        private var requestID: String?
+        private var usage: TokenUsage?
+        private let onUpdate: @Sendable (AgentProviderStreamUpdate) -> Void
+
+        init(onUpdate: @escaping @Sendable (AgentProviderStreamUpdate) -> Void) {
+            self.onUpdate = onUpdate
+        }
+
+        mutating func consume(_ chunk: Data) throws {
+            guard bytes.count + chunk.count <= 3_500_000 else { throw AgentProviderError.inputTooLarge }
+            bytes.append(chunk)
+            while let newline = bytes.firstIndex(of: 0x0A) {
+                let line = bytes[..<newline]
+                bytes.removeSubrange(...newline)
+                try consumeLine(String(decoding: line, as: UTF8.self).trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
+            }
+        }
+
+        mutating func finish() throws -> AgentProviderGenerationResult {
+            if !bytes.isEmpty {
+                try consumeLine(String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
+                bytes.removeAll(keepingCapacity: false)
+            }
+            try finishEvent()
+            guard !text.isEmpty else { throw AgentProviderError.invalidResponse }
+            onUpdate(AgentProviderStreamUpdate(delta: "", text: text, requestID: requestID,
+                                                usage: usage, finished: true))
+            return AgentProviderGenerationResult(text: text, requestID: requestID, usage: usage)
+        }
+
+        private mutating func consumeLine(_ line: String) throws {
+            if line.isEmpty {
+                try finishEvent()
+            } else if line.hasPrefix("data:") {
+                eventData.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+            } else if !line.hasPrefix(":") && eventData.isEmpty {
+                // A few compatible gateways ignore stream=true and return one JSON object.
+                eventData.append(line)
+            }
+        }
+
+        private mutating func finishEvent() throws {
+            guard !eventData.isEmpty else { return }
+            let raw = eventData.joined(separator: "\n")
+            eventData.removeAll(keepingCapacity: true)
+            guard raw != "[DONE]" else { return }
+            guard let data = raw.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw AgentProviderError.invalidResponse
+            }
+            if let id = object["id"] as? String { requestID = id }
+            if let error = object["error"] as? [String: Any], error["message"] != nil {
+                throw AgentProviderError.requestFailed
+            }
+            let eventType = object["type"] as? String
+            let response = object["response"] as? [String: Any]
+            if let responseID = response?["id"] as? String { requestID = responseID }
+            if let responseUsage = OpenAICompatibleAgentClient.usage(from: response?["usage"] as? [String: Any]) {
+                usage = responseUsage
+            } else if let eventUsage = OpenAICompatibleAgentClient.usage(from: object["usage"] as? [String: Any]) {
+                usage = eventUsage
+            }
+            if eventType == "response.failed" { throw AgentProviderError.requestFailed }
+            if let delta = object["delta"] as? String {
+                try append(delta)
+            } else if let choice = (object["choices"] as? [[String: Any]])?.first,
+                      let delta = choice["delta"] as? [String: Any], let content = delta["content"] as? String {
+                try append(content)
+            } else if let finalText = OpenAICompatibleAgentClient.responseText(from: response ?? object), text.isEmpty, !finalText.isEmpty {
+                try append(finalText)
+            }
+        }
+
+        private mutating func append(_ delta: String) throws {
+            guard delta.utf8.count <= 3_500_000 - text.utf8.count else { throw AgentProviderError.inputTooLarge }
+            guard delta.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil else {
+                throw AgentProviderError.invalidResponse
+            }
+            text.append(delta)
+            onUpdate(AgentProviderStreamUpdate(delta: delta, text: text, requestID: requestID, usage: usage))
+        }
     }
 }

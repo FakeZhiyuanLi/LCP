@@ -107,6 +107,25 @@ public final class ClassPlannerService {
         return ClassPlanResult(response: response, context: context)
     }
 
+    /// Streaming counterpart used by the chat UI. Context is still built once
+    /// before the request, while provider output is forwarded incrementally.
+    public func generateChatStream(classIDs: [UUID], history: [ChatMessage], message: String,
+                                   profile: AgentProviderProfile, apiKey: String,
+                                   maxContextBytes: Int = 1_000_000,
+                                   onUpdate: @escaping @Sendable (AgentProviderStreamUpdate) -> Void) async throws -> ClassPlanResult {
+        let request = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !request.isEmpty, request.utf8.count <= 4_096,
+              request.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil,
+              history.count <= 2_000 else {
+            throw ContextServiceError.invalidQuery
+        }
+        let context = try makeContext(classIDs: classIDs, maxBytes: maxContextBytes)
+        let prompt = Self.chatPrompt(classIDs: classIDs, history: history, message: request, context: context.markdown)
+        let client = try OpenAICompatibleAgentClient(profile: profile, apiKey: apiKey, http: http)
+        let response = try await client.generateStream(prompt: prompt, onUpdate: onUpdate)
+        return ClassPlanResult(response: response, context: context)
+    }
+
     /// Generate a reply for a persisted class or university conversation.
     /// The current source snapshot is rebuilt for every turn, while only a
     /// bounded tail of the prior dialogue is sent to the provider.
