@@ -128,4 +128,35 @@ final class ClassPlannerServiceTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Hash tables"))
         XCTAssertTrue(prompt.contains("untrusted study data"))
     }
+
+    @MainActor
+    func testChatGenerationIncludesBoundedConversationAndFreshContext() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("LCP-Planner-Chat-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = try ContextRepository(rootURL: root)
+        let enrollment = ClassEnrollment(courseCode: "SYN 46", title: "Synthetic Algorithms")
+        try repository.update { $0.classes.append(enrollment) }
+        let materialURL = root.deletingLastPathComponent().appendingPathComponent("planner-chat-\(UUID().uuidString).md")
+        defer { try? FileManager.default.removeItem(at: materialURL) }
+        try Data("# Hash tables\n\nReview chaining and open addressing.".utf8).write(to: materialURL)
+        _ = try MaterialService(repository: repository).importMaterial(from: materialURL, classID: enrollment.id)
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [PlannerProviderFixtureProtocol.self]
+        let service = ClassPlannerService(repository: repository, http: UniversityHTTP(configuration: configuration))
+        let profile = AgentProviderProfile(name: "Fixture", baseURL: "https://provider.example/v1", model: "fixture-model")
+        let history = [
+            ChatMessage(role: .user, content: "What did I miss in lecture?"),
+            ChatMessage(role: .assistant, content: "Review the hashing notes first.", agentIdentity: "Fixture")
+        ]
+        let result = try await service.generateChat(classIDs: [enrollment.id], history: history,
+                                                    message: "What should I practice next?", profile: profile, apiKey: "fixture-key")
+
+        XCTAssertEqual(result.response.text, "Plan fixture")
+        let prompt = try XCTUnwrap(PlannerProviderFixtureProtocol.requestBody["input"] as? String)
+        XCTAssertTrue(prompt.contains("What did I miss in lecture?"))
+        XCTAssertTrue(prompt.contains("What should I practice next?"))
+        XCTAssertTrue(prompt.contains("Hash tables"))
+        XCTAssertTrue(prompt.contains("persistent study companion"))
+    }
 }

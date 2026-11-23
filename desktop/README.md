@@ -134,6 +134,28 @@ Saving a cross-class answer creates one class-scoped history entry per selected
 class, with only that class's cited inputs attached to its entry. Archived classes
 are excluded from the default selection.
 
+### Persistent class and university chat
+
+Open a class and choose **Chat** to keep a conversation grounded only in that
+class's current library. **University Chat** in the sidebar or main menu keeps
+one persistent conversation across your active classes for questions such as
+weekly priorities, deadline conflicts, and study planning. Both conversations
+survive relaunch, library backup, and restore.
+
+Before each reply, LCP rebuilds a bounded snapshot from the selected scope. The
+snapshot can include saved materials, reviewed coursework, class history, and
+accepted lecture transcripts. Raw audio, provider keys, connection grants, and
+classes outside the selected scope are excluded. Assistant replies retain the
+provider identity, library revision, and exact immutable source citations used
+for that turn. Select a source under **Sources** to open the saved revision in
+LCP's reader.
+
+Chat uses the same enabled BYOK provider configured under **Agent Connections**.
+If no provider is configured, LCP shows setup actions instead of sending a
+request. The conversations are local library data, and LCP does not let a chat
+turn change classes, coursework, Canvas, Drive, Gmail, Gradescope, deadlines,
+grades, or recordings.
+
 - **UCI Canvas.** Open **Account → Settings → Approved Integrations** in
   UCI Canvas. If the university enables personal access tokens for your account,
   create one for your own LCP installation, then enter it under **Connections → UCI Canvas → Set Up**.

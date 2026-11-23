@@ -518,6 +518,7 @@ public final class ContextRepository {
         return coursework + state.pinnedCitations + state.activities.flatMap { $0.citations + ($0.inputContextManifest ?? []) }
             + state.activityRevisions.flatMap { $0.citations + ($0.inputContextManifest ?? []) }
             + state.proposals.flatMap { $0.citations + $0.contextManifest }
+            + (state.chatThreads ?? []).flatMap { $0.messages.flatMap(\.citations) }
             + state.recordings.flatMap { ($0.associationHistory ?? []).flatMap(\.retainedCitations) }
     }
 
@@ -648,6 +649,9 @@ public final class ContextRepository {
         try unique(state.materialRevisions); try unique(state.activities); try unique(state.activityRevisions)
         try unique(state.coursework); try unique(state.recordings); try unique(state.transcriptRevisions)
         try unique(state.connections); try unique(state.grants); try unique(state.proposals)
+        let chatThreads = state.chatThreads ?? []
+        try unique(chatThreads)
+        guard chatThreads.count <= 256 else { throw ContextRepositoryError.invalidState("chat thread limit exceeded") }
         let termIDs = Set(state.terms.map(\.id)), courseIDs = Set(state.courses.map(\.id))
         let classIDs = Set(state.classes.map(\.id)), materialIDs = Set(state.materials.map(\.id))
         let recordingIDs = Set(state.recordings.map(\.id))
@@ -821,6 +825,39 @@ public final class ContextRepository {
         for proposal in state.proposals {
             guard classIDs.contains(proposal.classID), !proposal.agentIdentity.isEmpty, !proposal.idempotencyKey.isEmpty else {
                 throw ContextRepositoryError.invalidState("agent proposal identity is invalid")
+            }
+        }
+        var chatMessageIDs: Set<UUID> = []
+        for thread in chatThreads {
+            guard thread.classID.map(classIDs.contains) ?? true,
+                  !thread.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  thread.title.utf8.count <= 256,
+                  thread.messages.count <= 2_000,
+                  thread.createdAt.timeIntervalSinceReferenceDate.isFinite,
+                  thread.updatedAt.timeIntervalSinceReferenceDate.isFinite,
+                  thread.updatedAt >= thread.createdAt else {
+                throw ContextRepositoryError.invalidState("chat thread metadata is invalid")
+            }
+            for message in thread.messages {
+                guard chatMessageIDs.insert(message.id).inserted,
+                      message.content.utf8.count <= 262_144,
+                      !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      message.content.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil,
+                      message.createdAt.timeIntervalSinceReferenceDate.isFinite,
+                      !message.contextClassIDs.isEmpty,
+                      message.contextClassIDs.count <= 32,
+                      message.citations.count <= 128,
+                      Set(message.contextClassIDs).count == message.contextClassIDs.count,
+                      message.contextClassIDs.allSatisfy(classIDs.contains),
+                      thread.classID.map({ message.contextClassIDs == [$0] }) ?? true,
+                      message.citations.allSatisfy({ message.contextClassIDs.contains($0.classID) }) else {
+                    throw ContextRepositoryError.invalidState("chat message is invalid or out of scope")
+                }
+                if let agent = message.agentIdentity {
+                    guard !agent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, agent.utf8.count <= 256 else {
+                        throw ContextRepositoryError.invalidState("chat agent identity is invalid")
+                    }
+                }
             }
         }
         for citation in allCitations(state) {

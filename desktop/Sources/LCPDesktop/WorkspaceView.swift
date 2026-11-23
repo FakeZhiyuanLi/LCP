@@ -25,6 +25,7 @@ struct WorkspaceView: View {
                     case .capture: CaptureWorkspaceView(model: model)
                     case .universityConnections: ConnectionsOverview(model: model).id(model.rootURL)
                     case .planner: ClassPlannerView(model: model, globalScope: true)
+                    case .universityChat: ClassChatView(model: model, globalScope: true)
                     case .connections: AgentConnectionsView(model: model)
                     case .review: ProposalReviewView(model: model)
                     default: WelcomeView(model: model)
@@ -109,7 +110,7 @@ private struct WorkspaceSidebar: View {
     private var visibleRoutes: [WorkspaceRoute] {
         [.welcome, .capture, .universityConnections] + model.visibleClassGroups.flatMap { group in
             group.classes.map { .classDetail($0.id) }
-        } + [.planner, .connections, .review]
+        } + [.planner, .universityChat, .connections, .review]
     }
 
     var body: some View {
@@ -169,6 +170,10 @@ private struct WorkspaceSidebar: View {
                         row(.planner, title: "Study Planner", icon: "sparkles")
                             .contextMenu {
                                 Button("Open Study Planner") { model.selection = .planner }
+                            }
+                        row(.universityChat, title: "University Chat", icon: "bubble.left.and.bubble.right.fill")
+                            .contextMenu {
+                                Button("Open University Chat") { model.openUniversityChat() }
                             }
                         row(.connections, title: "Agent Connections", icon: "point.3.connected.trianglepath.dotted")
                             .contextMenu {
@@ -508,6 +513,9 @@ private struct ClassMenuItems: View {
         Button("Plan with Agent…", systemImage: "sparkles") {
             model.openPlanner(for: enrollment.id)
         }
+        Button("Open Class Chat…", systemImage: "bubble.left.and.bubble.right") {
+            model.openClassChat(for: enrollment.id)
+        }
         Button("Import Material…", systemImage: "square.and.arrow.down") { model.importMaterials(for: enrollment.id) }
         ClassDriveFolderActions(model: model, course: enrollment)
         Button("Export Class Context…", systemImage: "square.and.arrow.up") { model.exportContextBundle(for: enrollment.id) }
@@ -545,6 +553,8 @@ struct ClassContextView: View {
                 switch selectedTab {
                 case .planner:
                     ClassPlannerView(model: model, classID: enrollment.id)
+                case .chat:
+                    ClassChatView(model: model, classID: enrollment.id)
                 case .materials:
                     MaterialLibraryView(model: model, classID: enrollment.id, expandedMaterial: $expandedMaterial, filter: $materialFilter)
                 case .history:
@@ -569,12 +579,21 @@ struct ClassContextView: View {
         .onChange(of: model.plannerClassID) { _, _ in
             activatePlannerIfRequested()
         }
+        .onChange(of: model.chatClassID) { _, _ in
+            activateChatIfRequested()
+        }
     }
 
     private func activatePlannerIfRequested() {
         guard model.plannerClassID == enrollment.id else { return }
         selectedTab = .planner
         model.plannerClassID = nil
+    }
+
+    private func activateChatIfRequested() {
+        guard model.chatClassID == enrollment.id else { return }
+        selectedTab = .chat
+        model.chatClassID = nil
     }
 
     private var courseCover: some View {

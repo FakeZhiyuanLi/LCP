@@ -484,6 +484,57 @@ public struct AgentProposal: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public enum ChatMessageRole: String, Codable, Equatable, Sendable {
+    case user
+    case assistant
+}
+
+/// One persisted turn in a class or university-wide study conversation.
+/// Assistant citations retain the exact immutable revisions supplied for that turn.
+public struct ChatMessage: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var role: ChatMessageRole
+    public var content: String
+    public var createdAt: Date
+    public var agentIdentity: String?
+    public var citations: [SourceCitation]
+    public var contextClassIDs: [UUID]
+    public var contextRevision: UInt64?
+
+    public init(id: UUID = UUID(), role: ChatMessageRole, content: String, createdAt: Date = Date(),
+                agentIdentity: String? = nil, citations: [SourceCitation] = [],
+                contextClassIDs: [UUID] = [], contextRevision: UInt64? = nil) {
+        self.id = id
+        self.role = role
+        self.content = content
+        self.createdAt = createdAt
+        self.agentIdentity = agentIdentity
+        self.citations = citations
+        self.contextClassIDs = contextClassIDs
+        self.contextRevision = contextRevision
+    }
+}
+
+/// A durable conversation. A nil classID represents the university-wide thread.
+public struct ChatThread: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var classID: UUID?
+    public var title: String
+    public var createdAt: Date
+    public var updatedAt: Date
+    public var messages: [ChatMessage]
+
+    public init(id: UUID = UUID(), classID: UUID? = nil, title: String, createdAt: Date = Date(),
+                updatedAt: Date = Date(), messages: [ChatMessage] = []) {
+        self.id = id
+        self.classID = classID
+        self.title = title
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.messages = messages
+    }
+}
+
 public struct ContextState: Codable, Equatable, Sendable {
     public static let currentSchemaVersion = 1
     public var schemaVersion: Int = Self.currentSchemaVersion
@@ -505,6 +556,9 @@ public struct ContextState: Codable, Equatable, Sendable {
     public var pinnedPayloads: [PayloadReference] = []
     public var feedGeneration: FeedGeneration?
     public var feedGenerations: [FeedGeneration] = []
+    /// Optional for compatibility with libraries written before persistent chat.
+    /// A nil value is equivalent to an empty chat collection.
+    public var chatThreads: [ChatThread]?
     private var driveFolderReservations: [DriveFolderReservation]?
     public init() {}
 

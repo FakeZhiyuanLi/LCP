@@ -67,6 +67,47 @@ final class ContextRepositoryTests: XCTestCase {
         XCTAssertTrue(restored.state.terms.isEmpty)
     }
 
+    @MainActor func testPersistentClassAndUniversityChatsSurviveReopenAndBackupRestore() async throws {
+        let root = try temporaryRoot()
+        let repository = try ContextRepository(rootURL: root.appendingPathComponent("library"))
+        let first = try seedClass(repository, name: "Fictional fall")
+        let second = try seedClass(repository, name: "Fictional winter")
+        let classMessage = ChatMessage(role: .user, content: "How should I review this class?", contextClassIDs: [first.id], contextRevision: 1)
+        let universityMessage = ChatMessage(role: .assistant, content: "Balance both fictional classes.", agentIdentity: "Synthetic agent",
+                                             contextClassIDs: [first.id, second.id], contextRevision: 1)
+        try repository.update {
+            $0.chatThreads = [
+                ChatThread(classID: first.id, title: first.shortLabel, messages: [classMessage]),
+                ChatThread(title: "University chat", messages: [universityMessage])
+            ]
+        }
+
+        let reopened = try ContextRepository(rootURL: root.appendingPathComponent("library"))
+        XCTAssertEqual(reopened.state.chatThreads?.count, 2)
+        XCTAssertEqual(reopened.state.chatThreads?.first?.messages, [classMessage])
+        XCTAssertNil(reopened.state.chatThreads?.last?.classID)
+
+        let backup = root.appendingPathComponent("backup")
+        try reopened.exportBackup(to: backup)
+        let restored = try ContextRepository(rootURL: root.appendingPathComponent("restored"))
+        try restored.restoreBackup(from: backup)
+        XCTAssertEqual(restored.state.chatThreads, reopened.state.chatThreads)
+    }
+
+    @MainActor func testClassChatCannotRetainCrossClassScope() async throws {
+        let repository = try ContextRepository(rootURL: temporaryRoot())
+        let first = try seedClass(repository, name: "Fictional fall")
+        let second = try seedClass(repository, name: "Fictional winter")
+        let before = repository.state
+        let message = ChatMessage(role: .assistant, content: "Synthetic answer", agentIdentity: "Fixture",
+                                  contextClassIDs: [first.id, second.id], contextRevision: 2)
+
+        XCTAssertThrowsError(try repository.update {
+            $0.chatThreads = [ChatThread(classID: first.id, title: first.shortLabel, messages: [message])]
+        })
+        XCTAssertEqual(repository.state, before)
+    }
+
     @MainActor func testThrowingOrInvalidTransactionLeavesDiskAndMemoryUnchanged() async throws {
         let repository = try ContextRepository(rootURL: temporaryRoot())
         try seedClass(repository)

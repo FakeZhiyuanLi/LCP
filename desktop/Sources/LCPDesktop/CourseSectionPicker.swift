@@ -2,6 +2,7 @@ import SwiftUI
 
 enum CourseSection: String, CaseIterable {
     case planner = "Plan"
+    case chat = "Chat"
     case materials = "Materials"
     case history = "History"
     case coursework = "Coursework"
@@ -12,6 +13,7 @@ enum CourseSection: String, CaseIterable {
     var symbol: String {
         switch self {
         case .planner: "sparkles"
+        case .chat: "bubble.left.and.bubble.right"
         case .materials: "doc.on.doc"
         case .history: "clock"
         case .coursework: "checklist"

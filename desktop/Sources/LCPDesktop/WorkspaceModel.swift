@@ -86,6 +86,13 @@ final class WorkspaceModel: ObservableObject {
             return $0.id.uuidString < $1.id.uuidString
         }
     }
+    var activeClasses: [ClassEnrollment] {
+        state.classes.filter { !$0.archived }.sorted {
+            let order = $0.shortLabel.localizedStandardCompare($1.shortLabel)
+            if order != .orderedSame { return order == .orderedAscending }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+    }
 
     var visibleClassGroups: [WorkspaceClassGroup] {
         let classesByTerm = Dictionary(grouping: visibleClasses, by: \.termID)
@@ -624,6 +631,79 @@ final class WorkspaceModel: ObservableObject {
     }
 
     @Published var plannerClassID: UUID?
+    @Published var chatClassID: UUID?
+
+    func openClassChat(for classID: UUID) {
+        guard state.classes.contains(where: { $0.id == classID }) else { return }
+        inWorkspace("Open Class Chat") { [self] in
+            selection = .classDetail(classID)
+            chatClassID = classID
+        }
+    }
+
+    func openUniversityChat() {
+        inWorkspace("Open University Chat") { [self] in
+            selection = .universityChat
+        }
+    }
+
+    func chatThread(classID: UUID?) -> ChatThread? {
+        (state.chatThreads ?? []).first { $0.classID == classID }
+    }
+
+    @discardableResult
+    func saveChatTurn(classID: UUID?, message: String, response: String, profile: AgentProviderProfile,
+                      context: ClassPlannerContext) -> Bool {
+        let request = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reply = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedIDs = Set(context.classIDs)
+        guard !request.isEmpty, request.utf8.count <= 4_096,
+              request.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil,
+              !reply.isEmpty, reply.utf8.count <= 262_144,
+              reply.rangeOfCharacter(from: .controlCharacters.subtracting(.newlines)) == nil,
+              !context.classIDs.isEmpty,
+              classID.map({ context.classIDs == [$0] }) ?? true,
+              context.classIDs.count <= 32,
+              Set(context.classIDs).count == context.classIDs.count,
+              context.classIDs.allSatisfy({ id in state.classes.contains(where: { $0.id == id }) }),
+              context.sourceCitations.allSatisfy({ selectedIDs.contains($0.classID) }),
+              context.sourceCitations.count <= 128 else {
+            errorMessage = "The chat context is stale or invalid. Refresh it and try again."
+            return false
+        }
+        let now = Date.now
+        let citations = context.sourceCitations
+        let user = ChatMessage(role: .user, content: request, createdAt: now,
+                               contextClassIDs: context.classIDs, contextRevision: context.repositoryRevision)
+        let assistant = ChatMessage(role: .assistant, content: reply, createdAt: now,
+                                    agentIdentity: profile.name, citations: citations,
+                                    contextClassIDs: context.classIDs, contextRevision: context.repositoryRevision)
+        var saved = false
+        mutate { state in
+            var threads = state.chatThreads ?? []
+            let index: Int
+            if let existing = threads.firstIndex(where: { $0.classID == classID }) {
+                index = existing
+            } else {
+                let label: String
+                if let classID {
+                    label = state.classes.first(where: { $0.id == classID })?.shortLabel ?? "Class chat"
+                } else {
+                    label = "University chat"
+                }
+                threads.append(ChatThread(classID: classID, title: label))
+                index = threads.index(before: threads.endIndex)
+            }
+            guard threads[index].messages.count <= 1_998 else {
+                throw DesktopUIError.message("This chat has reached its message limit. Start a new library backup before continuing.")
+            }
+            threads[index].messages.append(contentsOf: [user, assistant])
+            threads[index].updatedAt = now
+            state.chatThreads = threads
+            saved = true
+        }
+        return saved
+    }
 
     func saveAgentPlan(classIDs: [UUID], objective: String, plan: String, profile: AgentProviderProfile,
                        context: ClassPlannerContext) {
@@ -886,7 +966,7 @@ struct WorkspaceClassGroup: Identifiable {
 }
 
 enum LibraryTransfer { case backup, restore }
-enum WorkspaceRoute: Hashable, Codable { case welcome, capture, universityConnections, planner, classDetail(UUID), connections, review }
+enum WorkspaceRoute: Hashable, Codable { case welcome, capture, universityConnections, planner, universityChat, classDetail(UUID), connections, review }
 enum WorkspaceEditor: Hashable, Identifiable {
     case newTerm, editTerm, newClass, newActivity, newCoursework, newAgentGrant, newBYOKProvider
     case editClass(UUID)

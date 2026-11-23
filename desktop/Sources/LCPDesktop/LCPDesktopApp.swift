@@ -45,6 +45,7 @@ struct LCPDesktopApp: App {
                     .keyboardShortcut("i", modifiers: .command)
                     .disabled(workspace.selectedClassID == nil)
                 Button("Study Planner…", systemImage: "sparkles") { workspace.openPlanner() }
+                Button("University Chat…", systemImage: "bubble.left.and.bubble.right.fill") { workspace.openUniversityChat() }
                 Button("Open Capture") { workspace.openCapture() }
             }
             CommandGroup(after: .saveItem) {
