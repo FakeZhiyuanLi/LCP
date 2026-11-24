@@ -22,7 +22,9 @@ struct ClassChatView: View {
     private var selectedProfile: AgentProviderProfile? { profiles.first { $0.id == session.selectedProfileID } }
     private var activeClassIDs: [UUID] { session.classIDs(in: model) }
     private var chatThreads: [ChatThread] { model.chatThreads(for: session.classID) }
-    private var selectedThread: ChatThread? { model.chatThread(classID: session.classID, threadID: session.selectedThreadID) }
+    private var selectedThread: ChatThread? {
+        session.selectedThreadID.flatMap { model.chatThread(classID: session.classID, threadID: $0) }
+    }
     private var currentThreadTitle: String { selectedThread?.title ?? "New chat" }
     private var currentThreadDetail: String {
         guard let selectedThread else { return "Unsaved conversation" }
@@ -135,7 +137,7 @@ struct ClassChatView: View {
                 Button("New Chat", systemImage: "plus") {
                     _ = model.startNewChat(classID: session.classID)
                 }
-                .disabled(sending || unsavedReply != nil)
+                .disabled(sending || session.loadingFiles || unsavedReply != nil)
                 if !chatThreads.isEmpty {
                     Divider()
                     Section("Saved chats") {
@@ -150,7 +152,7 @@ struct ClassChatView: View {
                                         .foregroundStyle(WorkspacePalette.muted)
                                 }
                             }
-                            .disabled(thread.id == session.selectedThreadID || sending || unsavedReply != nil)
+                            .disabled(thread.id == session.selectedThreadID || sending || session.loadingFiles || unsavedReply != nil)
                         }
                     }
                 }
@@ -177,7 +179,7 @@ struct ClassChatView: View {
                 _ = model.startNewChat(classID: session.classID)
             }
             .buttonStyle(.bordered)
-            .disabled(sending || unsavedReply != nil)
+            .disabled(sending || session.loadingFiles || unsavedReply != nil)
             .help("Start a fresh conversation for this scope")
         }
     }

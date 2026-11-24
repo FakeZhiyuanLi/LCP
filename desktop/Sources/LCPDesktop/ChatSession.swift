@@ -130,7 +130,7 @@ final class ChatSession: ObservableObject {
 
     @discardableResult
     func selectExistingChat(_ threadID: UUID) -> Bool {
-        guard generation == nil else { return false }
+        guard generation == nil, !loadingFiles else { return false }
         guard threadID != selectedThreadID else { return true }
         saveConversationState()
         currentConversationID = threadID
@@ -141,7 +141,7 @@ final class ChatSession: ObservableObject {
 
     @discardableResult
     func startNewChat() -> Bool {
-        guard generation == nil else { return false }
+        guard generation == nil, !loadingFiles else { return false }
         saveConversationState()
         currentConversationID = UUID()
         selectedThreadID = nil

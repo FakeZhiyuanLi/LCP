@@ -713,7 +713,7 @@ final class WorkspaceModel: ObservableObject {
     func selectChat(classID: UUID?, threadID: UUID) -> Bool {
         guard chatThreads(for: classID).contains(where: { $0.id == threadID }) else { return false }
         let session = chatSession(for: classID)
-        guard session.generation == nil, unsavedChatReplies[classID] == nil else {
+        guard session.generation == nil, !session.loadingFiles, unsavedChatReplies[classID] == nil else {
             notice = "Finish or save the current reply before switching chats."
             return false
         }
@@ -723,7 +723,7 @@ final class WorkspaceModel: ObservableObject {
     @discardableResult
     func startNewChat(classID: UUID?) -> Bool {
         let session = chatSession(for: classID)
-        guard session.generation == nil, unsavedChatReplies[classID] == nil else {
+        guard session.generation == nil, !session.loadingFiles, unsavedChatReplies[classID] == nil else {
             notice = "Finish or save the current reply before starting a new chat."
             return false
         }
