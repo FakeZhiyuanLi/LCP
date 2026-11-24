@@ -52,6 +52,5 @@ struct MoreActionsMenu<Content: View>: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .accessibilityLabel(title)
-        .help(title)
     }
 }

@@ -82,18 +82,24 @@ struct MaterialLibraryView: View {
                     Button("Clear Filter") { filter = "" }
                 }
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(matches) { material in
-                            materialRow(material, current: material.currentRevisionID.flatMap { revisions[$0] })
-                            if material.id != matches.last?.id {
-                                Divider().padding(.leading, 68)
-                            }
-                        }
+                List {
+                    ForEach(Array(matches.enumerated()), id: \.element.id) { index, material in
+                        materialRow(material, current: material.currentRevisionID.flatMap { revisions[$0] },
+                                    showsDivider: index < matches.count - 1)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets())
                     }
-                    .padding(.vertical, 2)
-                    .workspacePanel()
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(WorkspacePalette.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(WorkspacePalette.line)
+                        .allowsHitTesting(false)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
@@ -147,7 +153,7 @@ struct MaterialLibraryView: View {
         }
     }
 
-    private func materialRow(_ material: SourceMaterial, current: MaterialRevision?) -> some View {
+    private func materialRow(_ material: SourceMaterial, current: MaterialRevision?, showsDivider: Bool) -> some View {
         let isWebLink = material.kind == MaterialService.webLinkKind
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 13) {
@@ -162,11 +168,9 @@ struct MaterialLibraryView: View {
                         .font(.system(.body, weight: .semibold))
                         .foregroundStyle(WorkspacePalette.ink)
                         .lineLimit(2)
-                        .help(material.title)
                     Text(sourceDetails(material, revision: current))
                         .font(.caption)
                         .foregroundStyle(WorkspacePalette.muted)
-                        .help(material.origin)
                 }
                 Spacer(minLength: 4)
                 if let current {
@@ -209,6 +213,9 @@ struct MaterialLibraryView: View {
                         VStack(alignment: .leading, spacing: 6) { revisionLabel(revision); revisionActions(material, revision) }
                     }
                 }
+            }
+            if showsDivider {
+                Divider().padding(.leading, 68)
             }
         }
         .padding(.horizontal, 16)
