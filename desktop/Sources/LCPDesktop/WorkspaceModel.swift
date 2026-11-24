@@ -169,6 +169,8 @@ final class WorkspaceModel: ObservableObject {
         do {
             try repository.refresh()
             if state != repository.state { state = repository.state }
+            let threads = state.chatThreads ?? []
+            for session in chatSessions.values { session.initializeSelection(from: threads) }
             missingPayloadCount = repository.unavailablePayloads.count
             lastRepositoryFingerprint = repositoryFingerprint()
         } catch { errorMessage = "The library could not be refreshed. Current context is preserved. \(error.localizedDescription)" }
@@ -659,6 +661,7 @@ final class WorkspaceModel: ObservableObject {
     func chatSession(for classID: UUID?) -> ChatSession {
         if let session = chatSessions[classID] { return session }
         let session = ChatSession(classID: classID)
+        session.initializeSelection(from: state.chatThreads ?? [])
         chatSessions[classID] = session
         return session
     }
@@ -685,8 +688,46 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    func chatThreads(for classID: UUID?) -> [ChatThread] {
+        (state.chatThreads ?? [])
+            .filter { $0.classID == classID }
+            .sorted {
+                if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+                if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+                return $0.id.uuidString > $1.id.uuidString
+            }
+    }
+
+    /// Compatibility lookup for older callers that did not select a thread.
+    /// It deliberately returns the first stored conversation for the scope.
     func chatThread(classID: UUID?) -> ChatThread? {
         (state.chatThreads ?? []).first { $0.classID == classID }
+    }
+
+    func chatThread(classID: UUID?, threadID: UUID?) -> ChatThread? {
+        guard let threadID else { return chatThread(classID: classID) }
+        return (state.chatThreads ?? []).first { $0.id == threadID && $0.classID == classID }
+    }
+
+    @discardableResult
+    func selectChat(classID: UUID?, threadID: UUID) -> Bool {
+        guard chatThreads(for: classID).contains(where: { $0.id == threadID }) else { return false }
+        let session = chatSession(for: classID)
+        guard session.generation == nil, unsavedChatReplies[classID] == nil else {
+            notice = "Finish or save the current reply before switching chats."
+            return false
+        }
+        return session.selectExistingChat(threadID)
+    }
+
+    @discardableResult
+    func startNewChat(classID: UUID?) -> Bool {
+        let session = chatSession(for: classID)
+        guard session.generation == nil, unsavedChatReplies[classID] == nil else {
+            notice = "Finish or save the current reply before starting a new chat."
+            return false
+        }
+        return session.startNewChat()
     }
 
     func discardUnsavedChatReply(classID: UUID?) {
@@ -694,12 +735,14 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func saveChatReply(classID: UUID?, question: String, result: ClassPlanResult, profile: AgentProviderProfile,
-                       diagnostics: AgentRequestDiagnostics, automaticallyFileUploads: Bool = false) -> Bool {
+                       diagnostics: AgentRequestDiagnostics, threadID: UUID? = nil,
+                       automaticallyFileUploads: Bool = false) -> Bool {
         diagnostics.chatStage(.save)
         do {
             try saveChatTurn(classID: classID, message: question, response: result.response.text, agentIdentity: result.isLocalReply ? "LCP" : profile.name,
                              context: result.context, usage: result.response.usage, replyID: diagnostics.id,
-                             uploads: result.uploads, suggestions: result.response.filingSuggestions, automaticallyFileUploads: automaticallyFileUploads)
+                             uploads: result.uploads, suggestions: result.response.filingSuggestions,
+                             threadID: threadID, automaticallyFileUploads: automaticallyFileUploads)
             unsavedChatReplies.removeValue(forKey: classID)
             return true
         } catch {
@@ -712,7 +755,8 @@ final class WorkspaceModel: ObservableObject {
 
     private func saveChatTurn(classID: UUID?, message: String, response: String, agentIdentity: String,
                               context: ClassPlannerContext, usage: TokenUsage?, replyID: UUID,
-                              uploads: [ChatUpload], suggestions: [ChatFilingSuggestion], automaticallyFileUploads: Bool) throws {
+                              uploads: [ChatUpload], suggestions: [ChatFilingSuggestion], threadID: UUID?,
+                              automaticallyFileUploads: Bool) throws {
         guard let repository else { throw DesktopUIError.message("The library is unavailable.") }
         let request = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let reply = response.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -746,19 +790,27 @@ final class WorkspaceModel: ObservableObject {
             }
             var threads = state.chatThreads ?? []
             let index: Int
-            if let existing = threads.firstIndex(where: { $0.classID == classID }) {
+            if let threadID {
+                if let existing = threads.firstIndex(where: { $0.id == threadID }) {
+                    guard threads[existing].classID == classID else {
+                        throw DesktopUIError.message("This chat belongs to a different class scope.")
+                    }
+                    index = existing
+                    if threads[index].messages.contains(where: { $0.id == replyID && $0.role == .assistant }) {
+                        throw AlreadySaved()
+                    }
+                } else {
+                    let label = newChatTitle(for: request, classID: classID, state: state)
+                    threads.append(ChatThread(id: threadID, classID: classID, title: label, createdAt: now, updatedAt: now))
+                    index = threads.index(before: threads.endIndex)
+                }
+            } else if let existing = threads.firstIndex(where: { $0.classID == classID }) {
                 index = existing
                 if threads[index].messages.contains(where: { $0.id == replyID && $0.role == .assistant }) {
                     throw AlreadySaved()
                 }
             } else {
-                let label: String
-                if let classID {
-                    let courseLabel = state.classes.first(where: { $0.id == classID })?.shortLabel ?? "Class chat"
-                    label = courseLabel.utf8.count <= ChatThread.maximumTitleBytes ? courseLabel : "Class chat"
-                } else {
-                    label = "University chat"
-                }
+                let label = newChatTitle(for: request, classID: classID, state: state)
                 threads.append(ChatThread(classID: classID, title: label, createdAt: now, updatedAt: now))
                 index = threads.index(before: threads.endIndex)
             }
@@ -781,6 +833,24 @@ final class WorkspaceModel: ObservableObject {
         do { try repository.update(appendTurn) }
         catch is AlreadySaved { /* The same reply was committed on a previous attempt. */ }
         refresh()
+    }
+
+    private func newChatTitle(for request: String, classID: UUID?, state: ContextState) -> String {
+        let candidate = request.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        if !candidate.isEmpty {
+            var bounded = ""
+            for character in candidate {
+                let next = bounded + String(character)
+                guard next.utf8.count <= ChatThread.maximumTitleBytes else { break }
+                bounded = next
+            }
+            if !bounded.isEmpty { return bounded }
+        }
+        if let classID {
+            let courseLabel = state.classes.first(where: { $0.id == classID })?.shortLabel ?? "Class chat"
+            return courseLabel.utf8.count <= ChatThread.maximumTitleBytes ? courseLabel : "Class chat"
+        }
+        return "University chat"
     }
 
     func saveAgentPlan(classIDs: [UUID], objective: String, plan: String, profile: AgentProviderProfile,

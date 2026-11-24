@@ -33,6 +33,9 @@ final class ChatSession: ObservableObject {
     }
 
     let classID: UUID?
+    /// The saved thread currently shown in the session. A nil value means the
+    /// user is composing a new conversation that has not been saved yet.
+    @Published private(set) var selectedThreadID: UUID?
     @Published var draft = ""
     @Published var uploads: [ChatUpload] = []
     @Published var automaticallyFileUploads = true
@@ -73,8 +76,92 @@ final class ChatSession: ObservableObject {
     @Published var errorDetails: String?
     @Published private(set) var generation: Generation?
     private var task: Task<Void, Never>?
+    private var currentConversationID = UUID()
+    private var initializedSelection = false
+
+    private struct ConversationState {
+        var draft = ""
+        var uploads: [ChatUpload] = []
+        var automaticallyFileUploads = true
+        var context: ContextSummary?
+    }
+
+    private var conversationStates: [UUID: ConversationState] = [:]
 
     init(classID: UUID?) { self.classID = classID }
+
+    /// Chooses the latest saved conversation the first time this scope is
+    /// opened. Keeping this one-time guard lets a deliberately opened new chat
+    /// stay selected while the repository refreshes in the background.
+    func initializeSelection(from threads: [ChatThread]) {
+        guard !initializedSelection else { return }
+        initializedSelection = true
+        if let latest = threads.filter({ $0.classID == classID }).max(by: Self.isOlder) {
+            selectedThreadID = latest.id
+            currentConversationID = latest.id
+        }
+        restoreConversationState()
+    }
+
+    private static func isOlder(_ lhs: ChatThread, than rhs: ChatThread) -> Bool {
+        if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt < rhs.updatedAt }
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    private func saveConversationState() {
+        conversationStates[currentConversationID] = ConversationState(
+            draft: draft,
+            uploads: uploads,
+            automaticallyFileUploads: automaticallyFileUploads,
+            context: context
+        )
+    }
+
+    private func restoreConversationState() {
+        let state = conversationStates[currentConversationID] ?? ConversationState()
+        draft = state.draft
+        uploads = state.uploads
+        automaticallyFileUploads = state.automaticallyFileUploads
+        context = state.context
+        status = nil
+        errorDetails = nil
+    }
+
+    @discardableResult
+    func selectExistingChat(_ threadID: UUID) -> Bool {
+        guard generation == nil else { return false }
+        guard threadID != selectedThreadID else { return true }
+        saveConversationState()
+        currentConversationID = threadID
+        selectedThreadID = threadID
+        restoreConversationState()
+        return true
+    }
+
+    @discardableResult
+    func startNewChat() -> Bool {
+        guard generation == nil else { return false }
+        saveConversationState()
+        currentConversationID = UUID()
+        selectedThreadID = nil
+        restoreConversationState()
+        return true
+    }
+
+    /// The ID used for the first save of a transient conversation. It becomes
+    /// the persisted ChatThread ID after the first reply is committed.
+    var conversationIDForSaving: UUID { currentConversationID }
+
+    func markCurrentConversationPersisted(as threadID: UUID) {
+        saveConversationState()
+        if currentConversationID != threadID, let state = conversationStates[currentConversationID] {
+            conversationStates[threadID] = state
+            conversationStates.removeValue(forKey: currentConversationID)
+        }
+        currentConversationID = threadID
+        selectedThreadID = threadID
+    }
 
     func classIDs(in model: WorkspaceModel) -> [UUID] {
         classID.map { [$0] } ?? model.activeClasses.map(\.id)
@@ -88,7 +175,8 @@ final class ChatSession: ObservableObject {
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let files = uploads
         let autoFile = automaticallyFileUploads
-        let history = model.chatThread(classID: classID)?.messages ?? []
+        let threadID = selectedThreadID
+        let history = threadID.flatMap { model.chatThread(classID: classID, threadID: $0)?.messages } ?? []
         let root = model.rootURL
         let providers = model.agentProviders
         let diagnostics = AgentRequestDiagnostics()
@@ -129,6 +217,7 @@ final class ChatSession: ObservableObject {
                 try Task.checkCancellation()
                 guard let model, model.repository === repository, model.rootURL == root else { return }
                 saveReply(in: model, question: question, result: result, profile: profile, diagnostics: diagnostics,
+                          threadID: threadID,
                           automaticallyFileUploads: autoFile && !files.isEmpty)
             } catch {
                 draft = question
@@ -152,10 +241,14 @@ final class ChatSession: ObservableObject {
     }
 
     func saveReply(in model: WorkspaceModel, question: String, result: ClassPlanResult,
-                   profile: AgentProviderProfile, diagnostics: AgentRequestDiagnostics, automaticallyFileUploads: Bool = false) {
+                   profile: AgentProviderProfile, diagnostics: AgentRequestDiagnostics,
+                   threadID: UUID? = nil, automaticallyFileUploads: Bool = false) {
+        let destinationThreadID = threadID ?? conversationIDForSaving
         if model.saveChatReply(classID: classID, question: question, result: result, profile: profile, diagnostics: diagnostics,
+                               threadID: destinationThreadID,
                                automaticallyFileUploads: automaticallyFileUploads) {
             context = ContextSummary(result.context)
+            markCurrentConversationPersisted(as: destinationThreadID)
         }
     }
 

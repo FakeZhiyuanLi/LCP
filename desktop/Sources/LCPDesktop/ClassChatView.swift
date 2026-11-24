@@ -21,7 +21,16 @@ struct ClassChatView: View {
     private var sending: Bool { session.generation != nil }
     private var selectedProfile: AgentProviderProfile? { profiles.first { $0.id == session.selectedProfileID } }
     private var activeClassIDs: [UUID] { session.classIDs(in: model) }
-    private var messages: [ChatMessage] { model.chatThread(classID: session.classID)?.messages ?? [] }
+    private var chatThreads: [ChatThread] { model.chatThreads(for: session.classID) }
+    private var selectedThread: ChatThread? { model.chatThread(classID: session.classID, threadID: session.selectedThreadID) }
+    private var currentThreadTitle: String { selectedThread?.title ?? "New chat" }
+    private var currentThreadDetail: String {
+        guard let selectedThread else { return "Unsaved conversation" }
+        let count = selectedThread.messages.count / 2
+        let turnLabel = count == 1 ? "turn" : "turns"
+        return "\(count) \(turnLabel) · \(selectedThread.updatedAt.formatted(date: .abbreviated, time: .shortened))"
+    }
+    private var messages: [ChatMessage] { selectedThread?.messages ?? [] }
     private var unsavedReply: UnsavedChatReply? { model.unsavedChatReplies[session.classID] }
     private var latestReplyID: UUID? { session.generation?.id ?? unsavedReply?.diagnostics.id ?? messages.last?.id }
     private var canAttach: Bool { !sending && !session.loadingFiles && unsavedReply == nil }
@@ -74,6 +83,12 @@ struct ClassChatView: View {
             guard showingContext, !sending else { return }
             scheduleContextRefresh()
         }
+        .onChange(of: session.selectedThreadID) { _, _ in
+            alignedReplyID = nil
+            transcriptLayout = nil
+            contextTask?.cancel()
+            if showingContext { scheduleContextRefresh() }
+        }
         .onDisappear {
             contextTask?.cancel()
             loadingContext = false
@@ -89,6 +104,7 @@ struct ClassChatView: View {
             Label(globalScope ? "University chat" : "Class chat", systemImage: "bubble.left.and.bubble.right")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
+            chatSwitcher
             Spacer(minLength: 8)
             if let generation = session.generation { generationStatus(generation).help(generation.phase.detail) }
             if transcriptLayout?.nearLatest == false, let latestReplyID {
@@ -111,6 +127,59 @@ struct ClassChatView: View {
         }
         .padding(.vertical, 8)
         .modifier(ChatColumn())
+    }
+
+    private var chatSwitcher: some View {
+        HStack(spacing: 6) {
+            Menu {
+                Button("New Chat", systemImage: "plus") {
+                    _ = model.startNewChat(classID: session.classID)
+                }
+                .disabled(sending || unsavedReply != nil)
+                if !chatThreads.isEmpty {
+                    Divider()
+                    Section("Saved chats") {
+                        ForEach(chatThreads) { thread in
+                            Button {
+                                _ = model.selectChat(classID: session.classID, threadID: thread.id)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(thread.title).lineLimit(1)
+                                    Text(thread.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption)
+                                        .foregroundStyle(WorkspacePalette.muted)
+                                }
+                            }
+                            .disabled(thread.id == session.selectedThreadID || sending || unsavedReply != nil)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "text.bubble")
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(currentThreadTitle).lineLimit(1)
+                        Text(currentThreadDetail)
+                            .font(.caption2)
+                            .foregroundStyle(WorkspacePalette.muted)
+                    }
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(WorkspacePalette.muted)
+                }
+            }
+            .buttonStyle(.bordered)
+            .help("Choose an earlier chat or start a new one")
+            .accessibilityLabel("Chat history")
+            .accessibilityValue(currentThreadTitle)
+
+            Button("New Chat", systemImage: "plus") {
+                _ = model.startNewChat(classID: session.classID)
+            }
+            .buttonStyle(.bordered)
+            .disabled(sending || unsavedReply != nil)
+            .help("Start a fresh conversation for this scope")
+        }
     }
 
     private func generationStatus(_ generation: ChatSession.Generation) -> some View {
@@ -241,7 +310,7 @@ struct ClassChatView: View {
                     .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WorkspacePalette.line) }
                 } else {
                     ForEach(messages) { message in
-                        ChatMessageBubble(model: model, threadID: model.chatThread(classID: session.classID)?.id,
+                        ChatMessageBubble(model: model, threadID: session.selectedThreadID,
                                           message: message, openCitation: { model.presentedCitation = $0 },
                                           onFirstLayout: { alignRenderedReply(message.id, in: proxy) })
                         .id(message.id)
