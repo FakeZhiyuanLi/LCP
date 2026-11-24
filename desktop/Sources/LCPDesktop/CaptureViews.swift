@@ -180,6 +180,10 @@ private struct CaptureControls: View {
             }
         } label: {
             Label("Recording options", systemImage: "slider.horizontal.3").font(.callout.weight(.medium))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { showsOptions.toggle() }
+                .accessibilityAddTraits(.isButton)
         }
     }
 

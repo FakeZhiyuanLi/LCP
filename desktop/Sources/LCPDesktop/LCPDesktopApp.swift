@@ -56,6 +56,9 @@ struct LCPDesktopApp: App {
                     Button("Class Planner", systemImage: "sparkles") { workspace.openPlanner(for: course.id) }
                 }
                 Button("University Chat", systemImage: "bubble.left.and.bubble.right") { workspace.openUniversityChat() }
+                Button("Chat History", systemImage: "clock.arrow.circlepath") {
+                    workspace.inWorkspace("Chat History") { workspace.openChatHistory() }
+                }
                 Button("Agent Connections", systemImage: "point.3.connected.trianglepath.dotted") { workspace.inWorkspace("Agent Connections") { workspace.selection = .connections } }
                 Button("Review Proposals", systemImage: "checkmark.bubble") { workspace.inWorkspace("Review Proposals") { workspace.selection = .review } }
             }

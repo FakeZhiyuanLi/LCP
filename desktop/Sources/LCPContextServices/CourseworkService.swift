@@ -18,8 +18,14 @@ public struct CourseworkService {
     public let repository: ContextRepository
     public init(repository: ContextRepository) { self.repository = repository }
 
-    public func reviewCanvasMaterial(_ materialID: UUID) throws -> CourseworkImportReview {
-        try repository.refresh()
+    public func reviewCanvasMaterial(_ materialID: UUID, refreshingRepository: Bool = true) throws -> CourseworkImportReview {
+        try autoreleasepool {
+            if refreshingRepository { try repository.refresh() }
+            return try reviewCanvasMaterialFromCurrentState(materialID)
+        }
+    }
+
+    private func reviewCanvasMaterialFromCurrentState(_ materialID: UUID) throws -> CourseworkImportReview {
         let state = repository.state
         guard let material = state.materials.first(where: { $0.id == materialID && $0.kind == "uci-canvas" }),
               let revision = state.materialRevisions.first(where: { $0.id == material.currentRevisionID }),

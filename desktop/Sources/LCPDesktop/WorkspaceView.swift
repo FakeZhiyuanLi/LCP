@@ -26,6 +26,7 @@ struct WorkspaceView: View {
                     case .universityConnections: ConnectionsOverview(model: model).id(model.rootURL)
                     case .planner: ClassPlannerView(model: model).id(model.rootURL).navigationTitle("Study Planner")
                     case .universityChat: ClassChatView(model: model).id(model.rootURL).navigationTitle("University Chat")
+                    case .chatHistory: ChatHistoryView(model: model).id(model.rootURL).navigationTitle("Chat History")
                     case .connections: AgentConnectionsView(model: model)
                     case .review: ProposalReviewView(model: model)
                     default: WelcomeView(model: model)
@@ -68,7 +69,7 @@ struct WorkspaceView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.pollLocalChanges() }
-        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in model.pollLocalChanges() }
+        .onAppear { model.startLocalPolling() }
         .sheet(item: $model.presentedEditor) { editor in
             switch editor {
             case .newTerm: TermEditor(model: model)
@@ -111,7 +112,7 @@ private struct WorkspaceSidebar: View {
     private var visibleRoutes: [WorkspaceRoute] {
         [.welcome, .capture, .universityConnections] + model.visibleClassGroups.flatMap { group in
             group.classes.map { .classDetail($0.id) }
-        } + [.planner, .universityChat, .connections, .review]
+        } + [.planner, .universityChat, .chatHistory, .connections, .review]
     }
 
     var body: some View {
@@ -175,6 +176,14 @@ private struct WorkspaceSidebar: View {
                         row(.universityChat, title: "University Chat", icon: "bubble.left.and.bubble.right")
                             .contextMenu {
                                 Button("Open University Chat") { model.openUniversityChat() }
+                            }
+                        row(.chatHistory, title: "Chat History",
+                            subtitle: model.chatHistoryThreads.isEmpty ? nil :
+                                model.chatHistoryThreads.count == 1 ? "1 saved chat" :
+                                "\(model.chatHistoryThreads.count) saved chats",
+                            icon: "clock.arrow.circlepath")
+                            .contextMenu {
+                                Button("Open Chat History") { model.openChatHistory() }
                             }
                         row(.connections, title: "Agent Connections", icon: "point.3.connected.trianglepath.dotted")
                             .contextMenu {

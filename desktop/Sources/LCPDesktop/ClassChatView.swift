@@ -21,7 +21,6 @@ struct ClassChatView: View {
     private var sending: Bool { session.generation != nil }
     private var selectedProfile: AgentProviderProfile? { profiles.first { $0.id == session.selectedProfileID } }
     private var activeClassIDs: [UUID] { session.classIDs(in: model) }
-    private var chatThreads: [ChatThread] { model.chatThreads(for: session.classID) }
     private var selectedThread: ChatThread? {
         session.selectedThreadID.flatMap { model.chatThread(classID: session.classID, threadID: $0) }
     }
@@ -138,24 +137,6 @@ struct ClassChatView: View {
                     _ = model.startNewChat(classID: session.classID)
                 }
                 .disabled(sending || session.loadingFiles || unsavedReply != nil)
-                if !chatThreads.isEmpty {
-                    Divider()
-                    Section("Saved chats") {
-                        ForEach(chatThreads) { thread in
-                            Button {
-                                _ = model.selectChat(classID: session.classID, threadID: thread.id)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(thread.title).lineLimit(1)
-                                    Text(thread.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                                        .font(.caption)
-                                        .foregroundStyle(WorkspacePalette.muted)
-                                }
-                            }
-                            .disabled(thread.id == session.selectedThreadID || sending || session.loadingFiles || unsavedReply != nil)
-                        }
-                    }
-                }
             } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "text.bubble")
@@ -171,9 +152,17 @@ struct ClassChatView: View {
                 }
             }
             .buttonStyle(.bordered)
-            .help("Choose an earlier chat or start a new one")
-            .accessibilityLabel("Chat history")
+            .help("Open current chat actions or start a new one")
+            .accessibilityLabel("Current chat actions")
             .accessibilityValue(currentThreadTitle)
+
+            Button("Browse History", systemImage: "clock.arrow.circlepath") {
+                model.openChatHistory()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.bordered)
+            .help("Browse saved chats across your classes and university context")
+            .accessibilityLabel("Browse chat history")
 
             Button("New Chat", systemImage: "plus") {
                 _ = model.startNewChat(classID: session.classID)

@@ -115,12 +115,19 @@ public struct UniversityHTTP: Sendable {
         request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization")
         request.httpBody = body
         diagnostics.sending(bodyBytes: body.count, idle: request.timeoutInterval, total: config.timeoutIntervalForResource)
-        return AsyncThrowingStream { continuation in
+        // A provider can emit thousands of small SSE chunks. Keep the stream
+        // bounded so a slow consumer cannot turn a transient UI stall into an
+        // unbounded Data allocation. A full buffer aborts the response instead
+        // of dropping a chunk and silently corrupting the transcript.
+        return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(128)) { continuation in
             let delegate = ProviderHTTPResponse(allowedHosts: [host], limit: limit,
                                                 continuation: continuation, diagnostics: diagnostics, displayTools: displayTools)
             let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
             let task = session.dataTask(with: request)
-            continuation.onTermination = { @Sendable _ in session.invalidateAndCancel() }
+            // The stream delegate retains the continuation. Capturing the
+            // session strongly here creates a session → delegate → continuation
+            // → onTermination → session cycle after a request completes.
+            continuation.onTermination = { @Sendable [weak session] _ in session?.invalidateAndCancel() }
             task.resume()
         }
     }
@@ -303,7 +310,16 @@ private final class ProviderHTTPResponse: NSObject, URLSessionDataDelegate, @unc
         }
         received += chunk.count
         diagnostics.receivedBody(bytes: received)
-        continuation.yield(chunk)
+        switch continuation.yield(chunk) {
+        case .enqueued:
+            break
+        case .dropped, .terminated:
+            continuation.finish(throwing: URLError(.resourceUnavailable))
+            dataTask.cancel()
+        @unknown default:
+            continuation.finish(throwing: URLError(.resourceUnavailable))
+            dataTask.cancel()
+        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {

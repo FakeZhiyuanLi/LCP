@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import Combine
 import Darwin
+import Foundation
 import LCPClient
 import LCPContextCore
 import LCPContextServices
@@ -74,9 +75,15 @@ final class WorkspaceModel: ObservableObject {
     @Published var presentedCanvasCourseworkReview: CourseworkImportReview?
     private var canvasSyncTask: Task<Void, Never>?
     private var canvasSyncLastAttempt: Date?
+    private var localPollingTimer: DispatchSourceTimer?
     private var captureSubscriptions = Set<AnyCancellable>()
     @Published var rootURL: URL {
-        didSet { if rootURL != oldValue { resetAgentSessions() } }
+        didSet {
+            if rootURL != oldValue {
+                resetAgentSessions()
+                cancelLocalTranscriptions()
+            }
+        }
     }
     private let usesPersistentProfilePreference: Bool
     private var lastImportedFeedIndex: Data?
@@ -275,10 +282,18 @@ final class WorkspaceModel: ObservableObject {
             canvasSyncPendingReviews = []
             return
         }
+        do {
+            try repository.refresh()
+            state = repository.state
+        } catch {
+            canvasSyncPendingReviews = []
+            return
+        }
+        let service = CourseworkService(repository: repository)
         var reviews: [CourseworkImportReview] = []
         for material in state.materials where material.kind == "uci-canvas" {
             do {
-                let review = try CourseworkService(repository: repository).reviewCanvasMaterial(material.id)
+                let review = try service.reviewCanvasMaterial(material.id, refreshingRepository: false)
                 if review.previous == nil || review.proposed != review.previous {
                     reviews.append(review)
                 }
@@ -650,6 +665,8 @@ final class WorkspaceModel: ObservableObject {
     let agentProviders: AgentProviders
     private var chatSessions: [UUID?: ChatSession] = [:]
     private var plannerSessions: [UUID?: PlannerSession] = [:]
+    @Published private(set) var transcriptionStatuses: [UUID: String] = [:]
+    private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
 
     func plannerSession(for classID: UUID?) -> PlannerSession {
         if let session = plannerSessions[classID] { return session }
@@ -674,6 +691,99 @@ final class WorkspaceModel: ObservableObject {
         unsavedChatReplies.removeAll()
     }
 
+    func transcriptionStatus(for recordingID: UUID) -> String? {
+        transcriptionStatuses[recordingID]
+    }
+
+    func transcribeLectureLocally(_ recordingID: UUID) {
+        guard transcriptionTasks[recordingID] == nil,
+              let repository,
+              let recording = state.recordings.first(where: { $0.id == recordingID }),
+              let path = recording.localAudioPath, path.hasPrefix("/"), !path.utf8.contains(0) else {
+            if state.recordings.first(where: { $0.id == recordingID })?.localAudioPath == nil {
+                errorMessage = "Link the finalized lecture audio before starting local transcription."
+            }
+            return
+        }
+        transcriptionStatuses[recordingID] = "Checking the finalized audio…"
+        let root = rootURL
+        let expected = recording
+        transcriptionTasks[recordingID] = Task { @MainActor [weak self] in
+            defer {
+                self?.transcriptionTasks.removeValue(forKey: recordingID)
+            }
+            do {
+                let credentials = ElevenLabsCredentials.forLibrary(root)
+                let key = try await credentials.apiKeyAsync()
+                self?.transcriptionStatuses[recordingID] = "Transcribing with ElevenLabs…"
+                let audio = URL(fileURLWithPath: path, isDirectory: false)
+                _ = try await AudioPlaybackService.verifyAudio(url: audio, recording: expected)
+                let client = try ElevenLabsTranscriptionClient(apiKey: key)
+                let result = try await client.transcribe(audioURL: audio, expectedSize: expected.sizeBytes,
+                                                         expectedSHA256: expected.sha256)
+                try Task.checkCancellation()
+                try self?.saveLocalTranscript(result, for: expected, repository: repository)
+                self?.transcriptionStatuses[recordingID] = "Transcript saved locally."
+            } catch is CancellationError {
+                self?.transcriptionStatuses[recordingID] = "Transcription cancelled."
+            } catch {
+                self?.transcriptionStatuses[recordingID] = error.localizedDescription
+                self?.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelLocalTranscription(_ recordingID: UUID) {
+        transcriptionTasks[recordingID]?.cancel()
+        transcriptionTasks.removeValue(forKey: recordingID)
+        transcriptionStatuses[recordingID] = "Transcription cancelled."
+    }
+
+    private func cancelLocalTranscriptions() {
+        for task in transcriptionTasks.values { task.cancel() }
+        transcriptionTasks.removeAll()
+    }
+
+    private func saveLocalTranscript(_ result: ElevenLabsTranscriptionResult, for recording: LectureRecording,
+                                     repository: ContextRepository) throws {
+        let acceptedJobID = "local-elevenlabs-\(UUID().uuidString)"
+        let payload: [String: Any] = [
+            "schema_version": 1,
+            "filename": recording.filename,
+            "size_bytes": recording.sizeBytes,
+            "sha256": recording.sha256,
+            "accepted_job_id": acceptedJobID,
+            "cues": result.cues.map { cue in
+                ["start": cue.start, "end": cue.end, "text": cue.text] as [String: Any]
+            },
+            "audio_events": result.audioEvents.map { event in
+                ["start": event.start, "end": event.end, "text": event.text] as [String: Any]
+            }
+        ]
+        let bytes = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        let content = try repository.storePayload(bytes, mediaType: "application/vnd.lcp.transcript+json")
+        let revision = TranscriptRevision(recordingID: recording.id, acceptedJobID: acceptedJobID, content: content,
+                                          cues: result.cues, audioEvents: result.audioEvents,
+                                          createdAt: Date.now, duration: result.duration)
+        try repository.update { state in
+            guard let index = state.recordings.firstIndex(where: { $0.id == recording.id }),
+                  state.recordings[index].filename == recording.filename,
+                  state.recordings[index].sizeBytes == recording.sizeBytes,
+                  state.recordings[index].sha256 == recording.sha256 else {
+                throw DesktopUIError.message("This lecture changed while transcription was running. Reopen it and try again.")
+            }
+            state.transcriptRevisions.append(revision)
+            state.recordings[index].acceptedJobID = acceptedJobID
+            state.recordings[index].currentTranscriptRevisionID = revision.id
+            state.recordings[index].status.processing = "local_transcribed"
+            state.recordings[index].status.quality = "unreviewed"
+            state.recordings[index].status.transcriptAvailable = "available"
+            state.recordings[index].status.drivePublication = "not_published"
+            state.recordings[index].status.observedAt = Date.now
+        }
+        refresh()
+    }
+
     func openClassChat(for classID: UUID) {
         guard state.classes.contains(where: { $0.id == classID }) else { return }
         inWorkspace("Open Class Chat") { [self] in
@@ -688,14 +798,51 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    /// All saved conversations across class and university scopes, newest first.
+    /// Transient chats remain in their ChatSession until their first saved reply.
+    var chatHistoryThreads: [ChatThread] {
+        (state.chatThreads ?? []).sorted(by: Self.isNewerChatThread)
+    }
+
+    func chatScopeLabel(for thread: ChatThread) -> String {
+        guard let classID = thread.classID else { return "University" }
+        return state.classes.first(where: { $0.id == classID })?.displayLabel ?? "Class unavailable"
+    }
+
+    func openChatHistory() {
+        selection = .chatHistory
+    }
+
+    /// Opens a saved thread in the same scope where it was created.
+    /// Returning false leaves the current chat in place when a generation,
+    /// attachment load, or unsaved reply prevents switching.
+    @discardableResult
+    func openChatHistoryThread(_ thread: ChatThread) -> Bool {
+        if let classID = thread.classID,
+           !state.classes.contains(where: { $0.id == classID }) {
+            notice = "This chat's class is no longer available in the library."
+            return false
+        }
+        guard selectChat(classID: thread.classID, threadID: thread.id) else { return false }
+        if let classID = thread.classID {
+            selectedClassSection = .chat
+            selection = .classDetail(classID)
+        } else {
+            selection = .universityChat
+        }
+        return true
+    }
+
     func chatThreads(for classID: UUID?) -> [ChatThread] {
         (state.chatThreads ?? [])
             .filter { $0.classID == classID }
-            .sorted {
-                if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
-                if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
-                return $0.id.uuidString > $1.id.uuidString
-            }
+            .sorted(by: Self.isNewerChatThread)
+    }
+
+    private static func isNewerChatThread(_ lhs: ChatThread, _ rhs: ChatThread) -> Bool {
+        if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+        return lhs.id.uuidString > rhs.id.uuidString
     }
 
     /// Compatibility lookup for older callers that did not select a thread.
@@ -1000,6 +1147,7 @@ final class WorkspaceModel: ObservableObject {
         if associationConflict { notice = "Recording finalized and local audio facts retained. Its existing class association differs from the capture session; review the lecture association before changing it." }
     }
     func prepareToTerminate() -> Bool {
+        stopLocalPolling()
         if quittingDuringTransfer { return true }
         guard let transferTask else { return capture?.deferApplicationTermination() ?? false }
         quittingDuringTransfer = true
@@ -1014,7 +1162,42 @@ final class WorkspaceModel: ObservableObject {
         }
         return true
     }
+
+    /// Keep ownership of the local change poller in the model. SwiftUI may
+    /// recompute `WorkspaceView.body` many times, so a view-owned publisher or
+    /// task can be recreated while an earlier poll is still alive. A single
+    /// dispatch timer stays attached to the model until app termination.
+    func startLocalPolling() {
+        guard localPollingTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .seconds(5), leeway: .milliseconds(250))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.pollLocalChanges() }
+        }
+        localPollingTimer = timer
+        timer.resume()
+    }
+
+    func stopLocalPolling() {
+        guard let timer = localPollingTimer else { return }
+        localPollingTimer = nil
+        timer.setEventHandler {}
+        timer.cancel()
+    }
+
     func pollLocalChanges() {
+        // This method is called by the five-second workspace timer. Feed
+        // validation and repository refresh use Foundation file/JSON APIs that
+        // may autorelease their `Data` buffers. Bound the whole polling turn so
+        // repeated feed generations do not accumulate one turn's buffers on
+        // the main run loop.
+        autoreleasepool {
+            pollLocalChangesWithoutAutoreleasePool()
+        }
+    }
+
+    private func pollLocalChangesWithoutAutoreleasePool() {
         guard !restorePending else { return }
         refreshIfChanged()
         processPendingDriveFolders()
@@ -1193,7 +1376,7 @@ extension ClassEnrollment {
     }
 }
 
-enum WorkspaceRoute: Hashable, Codable { case welcome, capture, universityConnections, planner, universityChat, classDetail(UUID), connections, review }
+enum WorkspaceRoute: Hashable, Codable { case welcome, capture, universityConnections, planner, universityChat, chatHistory, classDetail(UUID), connections, review }
 enum WorkspaceEditor: Hashable, Identifiable {
     case newTerm, editTerm, newClass, newActivity, newCoursework, newAgentGrant, newBYOKProvider
     case editClass(UUID)

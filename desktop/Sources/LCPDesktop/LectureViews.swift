@@ -86,7 +86,7 @@ private struct LectureDetailView: View {
         .onDisappear {
             audioLoadTask?.cancel()
             audioLoadTask = nil
-            playback.stop()
+            playback.unload()
         }
         .sheet(isPresented: $showAssociationEditor) { RecordingClassAssociationEditor(model: model, recording: recording) }
     }
@@ -143,6 +143,7 @@ private struct LectureDetailView: View {
             }
             Divider()
             audioControls
+            transcriptionControls
             if !revisions.isEmpty {
                 Picker("Transcript Revision", selection: $revisionID) {
                     Text(recording.currentTranscriptRevisionID == nil ? "No current accepted content" : "Current accepted revision").tag(nil as UUID?)
@@ -205,6 +206,42 @@ private struct LectureDetailView: View {
             .disabled(audioLoadTask != nil)
             Text(playback.status).font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    private var transcriptionControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Label("Local transcription", systemImage: "waveform.and.mic")
+                    .font(.headline)
+                Spacer()
+                if let status = model.transcriptionStatus(for: recording.id) {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+            HStack(spacing: 10) {
+                if model.transcriptionStatus(for: recording.id)?.hasPrefix("Checking") == true ||
+                    model.transcriptionStatus(for: recording.id)?.hasPrefix("Transcribing") == true {
+                    ProgressView().controlSize(.small)
+                    Button("Cancel") { model.cancelLocalTranscription(recording.id) }
+                } else {
+                    Button(recording.currentTranscriptRevisionID == nil ? "Transcribe Locally" : "Transcribe Again Locally",
+                           systemImage: "waveform.and.mic") {
+                        model.transcribeLectureLocally(recording.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(recording.localAudioPath == nil || model.transcriptionStatus(for: recording.id) == "Transcript saved locally.")
+                }
+            }
+            Text("Sends this verified audio file to ElevenLabs using your saved key, then stores the transcript in this library for offline class context.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
     }
     @ViewBuilder private func fact(_ label: String, _ value: String) -> some View { GridRow { Text(label).foregroundStyle(.secondary); Text(value.replacingOccurrences(of: "_", with: " ")).textSelection(.enabled) } }
     private func citation(_ revision: TranscriptRevision, cueIndex: Int) -> SourceCitation {

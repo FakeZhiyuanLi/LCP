@@ -48,6 +48,19 @@ public final class FeedImporter {
 
     @discardableResult
     public func importGeneration(from root: URL) throws -> FeedImportResult {
+        // Feed imports run from the main-actor polling timer. Foundation's file
+        // and JSON APIs bridge temporary buffers through Objective-C, and the
+        // main run loop can otherwise keep those autoreleased `Data` buffers
+        // alive across many timer callbacks. Keep each complete import inside a
+        // bounded pool so a frequently regenerated feed cannot grow the app's
+        // memory footprint with one generation after another.
+        try autoreleasepool {
+            try importGenerationWithoutAutoreleasePool(from: root)
+        }
+    }
+
+    @discardableResult
+    private func importGenerationWithoutAutoreleasePool(from root: URL) throws -> FeedImportResult {
         try repository.refresh()
         let directory = try FeedDirectory(root)
         let indexData = try directory.readIndex()

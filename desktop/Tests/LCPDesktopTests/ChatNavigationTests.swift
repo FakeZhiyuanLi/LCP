@@ -7,6 +7,19 @@ import LCPContextServices
 
 @MainActor
 final class ChatNavigationTests: XCTestCase {
+    func testRapidStreamUpdatesCoalesceToTheLatestPendingDelivery() async throws {
+        var delivered: [String] = []
+        let coalescer = ChatStreamUpdateCoalescer { update in
+            delivered.append(update.text)
+        }
+        for index in 0..<10_000 {
+            coalescer.enqueue(.init(text: String(index)))
+        }
+
+        try await waitFor("latest coalesced stream update") { delivered.last == "9999" }
+        XCTAssertEqual(delivered, ["9999"])
+    }
+
     func testLocalThanksIsSavedInBothChatsWithoutReadingTheKey() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

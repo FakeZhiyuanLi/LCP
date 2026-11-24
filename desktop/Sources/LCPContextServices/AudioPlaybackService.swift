@@ -99,6 +99,18 @@ public final class AudioPlaybackService: ObservableObject {
         if player != nil { status = "Stopped" }
     }
 
+    /// Releases the decoded audio buffer when its owning lecture view leaves
+    /// the screen. `stop()` intentionally keeps the player available for a
+    /// later Play action, while an unloaded view should not retain a potentially
+    /// large lecture recording.
+    public func unload() {
+        stop()
+        player = nil
+        duration = 0
+        recordingID = nil
+        status = "Audio not selected"
+    }
+
     public func seek(to time: TimeInterval) throws {
         guard let player else { throw AudioPlaybackError.notLoaded }
         guard time.isFinite, time >= 0, time <= player.duration else { throw AudioPlaybackError.invalidTime }

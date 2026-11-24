@@ -128,12 +128,16 @@ public final class ContextRepository {
     /// Re-read through a fresh SwiftData context on each external tool request.
     /// This makes revocation visible across the desktop and its stdio adapter.
     public func refresh() throws {
-        try withLock(exclusive: false) {
-            let next = try readState()
-            try Self.validate(next, requirePayloadBytes: false, payload: { try self.readPayload($0) })
-            state = next
-            unavailablePayloads = try Self.allPayloads(next).filter { (try? self.readPayload($0)) == nil }
+        let snapshot: (ContextState, [PayloadReference]) = try autoreleasepool {
+            try withLock(exclusive: false) {
+                let next = try readState()
+                try Self.validate(next, requirePayloadBytes: false, payload: { try self.readPayload($0) })
+                let unavailable = try Self.allPayloads(next).filter { (try? self.readPayload($0)) == nil }
+                return (next, unavailable)
+            }
         }
+        state = snapshot.0
+        unavailablePayloads = snapshot.1
     }
 
     /// Reload, mutate a value snapshot, validate the entire graph and its bytes,

@@ -3,6 +3,59 @@ import Foundation
 import LCPContextCore
 import LCPContextServices
 
+/// Keeps provider deltas from piling up on the main actor when a gateway emits
+/// them faster than SwiftUI can render. The provider still receives every
+/// delta, while the UI receives the newest complete response available when it
+/// gets a turn.
+final class ChatStreamUpdateCoalescer: @unchecked Sendable {
+    private let lock = NSLock()
+    private let deliver: @MainActor @Sendable (AgentProviderStreamUpdate) -> Void
+    private var pending: AgentProviderStreamUpdate?
+    private var deliveryScheduled = false
+
+    init(deliver: @escaping @MainActor @Sendable (AgentProviderStreamUpdate) -> Void) {
+        self.deliver = deliver
+    }
+
+    func enqueue(_ update: AgentProviderStreamUpdate) {
+        lock.lock()
+        pending = update
+        guard !deliveryScheduled else {
+            lock.unlock()
+            return
+        }
+        deliveryScheduled = true
+        lock.unlock()
+        scheduleDelivery()
+    }
+
+    private func scheduleDelivery() {
+        Task { @MainActor [self] in
+            deliverLatest()
+        }
+    }
+
+    @MainActor
+    private func deliverLatest() {
+        lock.lock()
+        guard let update = pending else {
+            deliveryScheduled = false
+            lock.unlock()
+            return
+        }
+        pending = nil
+        lock.unlock()
+
+        deliver(update)
+
+        lock.lock()
+        let hasPending = pending != nil
+        if !hasPending { deliveryScheduled = false }
+        lock.unlock()
+        if hasPending { scheduleDelivery() }
+    }
+}
+
 /// Drafts and running requests belong to a conversation, even while its view is closed.
 @MainActor
 final class ChatSession: ObservableObject {
@@ -187,6 +240,13 @@ final class ChatSession: ObservableObject {
         uploads = []
         automaticallyFileUploads = true
         status = nil
+        let updateCoalescer = ChatStreamUpdateCoalescer { [weak self] update in
+            guard let self, var current = self.generation,
+                  current.id == id, current.phase != .cancelling else { return }
+            if !update.text.isEmpty { current.phase = .streaming }
+            current.update = update
+            self.generation = current
+        }
 
         task = Task { [self, weak model] in
             defer {
@@ -206,13 +266,7 @@ final class ChatSession: ObservableObject {
                     uploads: files, diagnostics: diagnostics, onRequestReady: {
                         self.generation?.phase = .waiting
                     }, onUpdate: { update in
-                        DispatchQueue.main.async { [weak self] in
-                            guard let self, var current = self.generation,
-                                  current.id == id, current.phase != .cancelling else { return }
-                            if !update.text.isEmpty { current.phase = .streaming }
-                            current.update = update
-                            self.generation = current
-                        }
+                        updateCoalescer.enqueue(update)
                     })
                 try Task.checkCancellation()
                 guard let model, model.repository === repository, model.rootURL == root else { return }

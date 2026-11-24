@@ -298,10 +298,18 @@ public struct OpenAICompatibleAgentClient: Sendable {
                 defer { diagnostics.streamSummary(parser) }
                 for try await chunk in chunks {
                     try Task.checkCancellation()
-                    try parser.consume(chunk)
+                    // JSONSerialization and the URLSession bridge can create
+                    // autoreleased Data for every SSE chunk. A long answer may
+                    // contain thousands of chunks, so bound those temporary
+                    // buffers to one parser turn instead of the task lifetime.
+                    try autoreleasepool {
+                        try parser.consume(chunk)
+                    }
                 }
                 try Task.checkCancellation()
-                return try parser.finish()
+                return try autoreleasepool {
+                    try parser.finish()
+                }
             }
             let first = try await withGenerationBody(prompt: prompt, maximum: maxOutputTokens, stream: true, files: files) { body, tools in
                 try await stream(body, tools: tools, update: onUpdate)
